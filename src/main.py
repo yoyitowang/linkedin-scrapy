@@ -6,7 +6,6 @@ This script integrates the LinkedIn job scraper with the Apify platform.
 from __future__ import annotations
 
 import os
-import json
 import logging
 from apify import Actor
 from scrapy.crawler import CrawlerProcess
@@ -31,7 +30,7 @@ async def main() -> None:
         linkedin_username = actor_input.get('linkedin_username')
         linkedin_password = actor_input.get('linkedin_password')
         max_pages = actor_input.get('max_pages', 5)
-        max_jobs = actor_input.get('max_jobs', 0)  # New parameter for job count limit
+        max_jobs = actor_input.get('max_jobs', 0)  # Parameter for job count limit
         start_urls = [url.get('url') for url in actor_input.get('start_urls', [])]
         debug = actor_input.get('debug', False)
         
@@ -53,13 +52,6 @@ async def main() -> None:
         if max_jobs > 0:
             Actor.log.info(f"Job limit set: Will scrape a maximum of {max_jobs} jobs")
         
-        # Configure output paths for Apify dataset
-        dataset_dir = os.path.join(os.environ.get('APIFY_LOCAL_STORAGE_DIR', ''), 'datasets', 'default')
-        os.makedirs(dataset_dir, exist_ok=True)
-        
-        json_output = os.path.join(dataset_dir, 'linkedin_jobs_output.json')
-        csv_output = os.path.join(dataset_dir, 'linkedin_jobs_output.csv')
-        
         # Get Scrapy project settings
         settings = get_project_settings()
         
@@ -79,16 +71,6 @@ async def main() -> None:
             settings.set('LOG_LEVEL', 'DEBUG')
             settings.set('LOG_ENABLED', True)
         
-        # Update settings for output
-        settings.set('FEEDS', {
-            json_output: {
-                'format': 'json',
-                'encoding': 'utf8',
-                'indent': 4,
-                'overwrite': True,
-            },
-        })
-        
         # Add debug flag to settings
         settings.set('DEBUG_MODE', debug)
         
@@ -99,7 +81,7 @@ async def main() -> None:
             'username': linkedin_username,
             'password': linkedin_password,
             'max_pages': max_pages,
-            'max_jobs': max_jobs,  # Pass the new parameter
+            'max_jobs': max_jobs,
             'start_urls': start_urls,
             'debug': debug
         }
@@ -111,35 +93,10 @@ async def main() -> None:
         # Log start of scraping
         Actor.log.info("Starting LinkedIn job scraper...")
         
-        # Run the crawler
+        # Run the crawler - this will handle pushing data to the Apify dataset
         process.start()
         
         # Log completion
         Actor.log.info("LinkedIn job scraping completed")
         
-        # Check if output files were created
-        if os.path.exists(json_output):
-            # Read the JSON file to get the count of jobs
-            try:
-                with open(json_output, 'r', encoding='utf-8') as f:
-                    jobs_data = json.load(f)
-                    job_count = len(jobs_data) if isinstance(jobs_data, list) else 1
-                    
-                Actor.log.info(f"Successfully scraped {job_count} LinkedIn jobs")
-                
-                # Push a summary of the results to the dataset
-                await Actor.push_data({
-                    "jobCount": job_count,
-                    "message": f"Successfully scraped {job_count} LinkedIn jobs",
-                    "searchParams": {
-                        "keyword": keyword,
-                        "location": location,
-                        "maxJobs": max_jobs,
-                        "maxPages": max_pages
-                    }
-                })
-                
-            except Exception as e:
-                Actor.log.error(f"Error reading output files: {e}")
-        else:
-            Actor.log.warning("No output files were created. The scraper may have failed to find any jobs.")
+        # Note: We don't need to read output files anymore since we're pushing data directly to Apify dataset

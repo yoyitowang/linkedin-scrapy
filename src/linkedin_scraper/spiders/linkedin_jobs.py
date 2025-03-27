@@ -3,6 +3,7 @@ import json
 import time
 from datetime import datetime
 from urllib.parse import urlencode
+from scrapy.exceptions import CloseSpider
 from ..items import LinkedinJobItem
 
 
@@ -26,7 +27,7 @@ class LinkedinJobsSpider(scrapy.Spider):
         self.linkedin_username = username
         self.linkedin_password = password
         self.max_pages = int(max_pages)
-        self.max_jobs = int(max_jobs)  # New parameter for job count limit
+        self.max_jobs = int(max_jobs)  # Parameter for job count limit
         self.page_count = 0
         self.job_count = 0  # Counter for scraped jobs
         self.start_urls_list = start_urls or []
@@ -109,12 +110,17 @@ class LinkedinJobsSpider(scrapy.Spider):
         else:
             self.logger.error("Keyword and location parameters are required for job search")
     
+    def check_job_limit(self):
+        """Check if we've reached the job limit and close spider if needed"""
+        if self.max_jobs > 0 and self.job_count >= self.max_jobs:
+            self.logger.info(f"✅ Reached the maximum job count limit ({self.max_jobs}). Stopping the scraper.")
+            # Raise CloseSpider exception to immediately stop the crawling process
+            raise CloseSpider(f"Reached maximum job count: {self.max_jobs}")
+    
     def parse_search_results(self, response):
         """Parse the job search results page"""
         # Check if we've reached the job limit
-        if self.max_jobs > 0 and self.job_count >= self.max_jobs:
-            self.logger.info(f"Reached the maximum job count limit ({self.max_jobs}). Stopping the scraper.")
-            return
+        self.check_job_limit()
             
         self.page_count += 1
         self.logger.info(f"Parsing search results page {self.page_count} from: {response.url}")
@@ -123,9 +129,9 @@ class LinkedinJobsSpider(scrapy.Spider):
         job_cards = response.css("div.base-card")
         
         for job_card in job_cards:
-            # Check if we've reached the job limit
+            # Check if we've reached the job limit before processing each job
             if self.max_jobs > 0 and self.job_count >= self.max_jobs:
-                self.logger.info(f"Reached the maximum job count limit ({self.max_jobs}). Stopping further job parsing.")
+                self.logger.info(f"✅ Reached the maximum job count limit ({self.max_jobs}) while parsing results. Stopping.")
                 return
                 
             job_link = job_card.css("a.base-card__full-link::attr(href)").get()
@@ -172,7 +178,7 @@ class LinkedinJobsSpider(scrapy.Spider):
         """Parse the job details page"""
         # Check if we've reached the job limit
         if self.max_jobs > 0 and self.job_count >= self.max_jobs:
-            self.logger.info(f"Reached the maximum job count limit ({self.max_jobs}). Skipping job.")
+            self.logger.info(f"✅ Reached the maximum job count limit ({self.max_jobs}). Skipping job.")
             return
             
         # Increment job counter
@@ -220,4 +226,12 @@ class LinkedinJobsSpider(scrapy.Spider):
             self.logger.debug(f"Full job data: {json.dumps({k: v for k, v in dict(job_item).items() if k != 'job_description'}, ensure_ascii=False)}")
             self.logger.debug(f"Job description length: {len(job_item.get('job_description', ''))}")
         
+        # Check if we've reached the job limit after processing this job
+        if self.max_jobs > 0 and self.job_count >= self.max_jobs:
+            self.logger.info(f"✅ Reached the maximum job count limit ({self.max_jobs}). This is the final job.")
+            # The spider will be closed after yielding this item
+        
         yield job_item
+        
+        # Check job limit after yielding the item
+        self.check_job_limit()
