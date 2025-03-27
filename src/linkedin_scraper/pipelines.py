@@ -16,6 +16,11 @@ class LinkedinJobPipeline:
     def __init__(self):
         """Initialize the pipeline with a list to collect all items"""
         self.items = []
+        # Create a dataset directory for backup storage
+        self.dataset_dir = os.path.join(os.environ.get('APIFY_LOCAL_STORAGE_DIR', ''), 'datasets', 'default')
+        os.makedirs(self.dataset_dir, exist_ok=True)
+        self.json_output = os.path.join(self.dataset_dir, 'linkedin_jobs_output.json')
+        self.csv_output = os.path.join(self.dataset_dir, 'linkedin_jobs_output.csv')
     
     def process_item(self, item, spider):
         """
@@ -46,11 +51,15 @@ class LinkedinJobPipeline:
         # Convert to dictionary for pushing to Apify dataset
         item_dict = dict(adapter)
         
-        # Store the item in our collection for summary
+        # Store the item in our collection for summary and backup
         self.items.append(item_dict)
         
-        # Push data to Apify dataset
-        self._push_to_apify_dataset(item_dict, spider.debug, spider)
+        # Write to local JSON file as a backup
+        self._write_json_backup()
+        
+        # Log pushed data
+        if spider.debug:
+            spider.logger.info(f"Processed job data: {item_dict.get('job_title')}")
         
         return item
     
@@ -70,40 +79,57 @@ class LinkedinJobPipeline:
             return ""
         return html.strip()
     
-    def _push_to_apify_dataset(self, item_dict, debug_mode, spider):
-        """
-        Push item to Apify dataset using the Actor.push_data method
-        
-        Args:
-            item_dict: Dictionary containing job data
-            debug_mode: Boolean flag to control output verbosity
-            spider: Spider instance for logging
-        """
+    def _write_json_backup(self):
+        """Write all collected items to a JSON file as backup"""
         try:
-            # Use asyncio to run the push_data coroutine
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If we're in a running event loop, use create_task
-                asyncio.create_task(Actor.push_data(item_dict))
-            else:
-                # Otherwise, run the coroutine directly
-                loop.run_until_complete(Actor.push_data(item_dict))
-            
-            if debug_mode:
-                spider.logger.info(f"Pushed job data to Apify dataset: {item_dict.get('job_title')}")
+            with open(self.json_output, 'w', encoding='utf-8') as f:
+                json.dump(self.items, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            spider.logger.error(f"Error pushing data to Apify dataset: {e}")
+            print(f"Error writing JSON backup: {e}")
+    
+    def _write_csv_backup(self):
+        """Write all collected items to a CSV file as backup"""
+        try:
+            import csv
+            
+            # Skip if no items
+            if not self.items:
+                return
+            
+            # Get all possible field names from all items
+            fieldnames = set()
+            for item in self.items:
+                fieldnames.update(item.keys())
+            
+            # Remove HTML description to make CSV more readable
+            if 'job_description' in fieldnames:
+                fieldnames.remove('job_description')
+            
+            # Write to CSV
+            with open(self.csv_output, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=sorted(fieldnames))
+                writer.writeheader()
+                
+                for item in self.items:
+                    # Create a copy without HTML description for CSV
+                    csv_item = {k: v for k, v in item.items() if k != 'job_description'}
+                    writer.writerow(csv_item)
+        except Exception as e:
+            print(f"Error writing CSV backup: {e}")
     
     def close_spider(self, spider):
         """
         Called when the spider is closed
-        Push a summary of the scraping results
+        Push all collected data to Apify dataset at once
         """
         try:
+            # Write CSV backup
+            self._write_csv_backup()
+            
             # Log completion
             spider.logger.info(f"LinkedIn job scraping completed. Total jobs scraped: {len(self.items)}")
             
-            # Push a summary to the dataset
+            # Add a summary item
             summary = {
                 "type": "summary",
                 "jobCount": len(self.items),
@@ -117,12 +143,14 @@ class LinkedinJobPipeline:
                 "completedAt": datetime.now().isoformat()
             }
             
-            # Push the summary to Apify dataset
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(Actor.push_data(summary))
-            else:
-                loop.run_until_complete(Actor.push_data(summary))
+            # Add summary to items list
+            self.items.append(summary)
+            
+            # Update the JSON backup with summary
+            self._write_json_backup()
+            
+            # Push all data to Apify dataset at once (after spider is closed)
+            # This will be handled by the main.py file
                 
         except Exception as e:
-            spider.logger.error(f"Error pushing summary to Apify dataset: {e}")
+            spider.logger.error(f"Error in close_spider: {e}")

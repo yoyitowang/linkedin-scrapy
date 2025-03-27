@@ -6,6 +6,7 @@ This script integrates the LinkedIn job scraper with the Apify platform.
 from __future__ import annotations
 
 import os
+import json
 import logging
 from apify import Actor
 from scrapy.crawler import CrawlerProcess
@@ -52,6 +53,13 @@ async def main() -> None:
         if max_jobs > 0:
             Actor.log.info(f"Job limit set: Will scrape a maximum of {max_jobs} jobs")
         
+        # Configure output paths for Apify dataset
+        dataset_dir = os.path.join(os.environ.get('APIFY_LOCAL_STORAGE_DIR', ''), 'datasets', 'default')
+        os.makedirs(dataset_dir, exist_ok=True)
+        
+        json_output = os.path.join(dataset_dir, 'linkedin_jobs_output.json')
+        csv_output = os.path.join(dataset_dir, 'linkedin_jobs_output.csv')
+        
         # Get Scrapy project settings
         settings = get_project_settings()
         
@@ -93,10 +101,62 @@ async def main() -> None:
         # Log start of scraping
         Actor.log.info("Starting LinkedIn job scraper...")
         
-        # Run the crawler - this will handle pushing data to the Apify dataset
+        # Run the crawler - this will collect data in the pipeline
         process.start()
         
         # Log completion
         Actor.log.info("LinkedIn job scraping completed")
         
-        # Note: We don't need to read output files anymore since we're pushing data directly to Apify dataset
+        # After the crawler is done, push all collected data to Apify dataset
+        if os.path.exists(json_output):
+            try:
+                # Read the collected data from the JSON file
+                with open(json_output, 'r', encoding='utf-8') as f:
+                    jobs_data = json.load(f)
+                
+                # Count the actual jobs (excluding the summary)
+                job_count = len([item for item in jobs_data if item.get('type') != 'summary'])
+                Actor.log.info(f"Successfully scraped {job_count} LinkedIn jobs")
+                
+                # Push all data to Apify dataset at once
+                for item in jobs_data:
+                    await Actor.push_data(item)
+                
+                # Store CSV and JSON as named keys in the default key-value store
+                # This makes them available for download from the Apify UI
+                default_key_value_store = await Actor.open_key_value_store()
+                
+                # Store the JSON file
+                with open(json_output, 'rb') as f:
+                    await default_key_value_store.set_value(
+                        'linkedin_jobs.json', 
+                        f.read(), 
+                        content_type='application/json'
+                    )
+                Actor.log.info("Saved JSON output for download")
+                
+                # Store the CSV file if it exists
+                if os.path.exists(csv_output):
+                    with open(csv_output, 'rb') as f:
+                        await default_key_value_store.set_value(
+                            'linkedin_jobs.csv', 
+                            f.read(), 
+                            content_type='text/csv'
+                        )
+                    Actor.log.info("Saved CSV output for download")
+                
+                # Add a record with download links
+                await Actor.push_data({
+                    "type": "download_links",
+                    "jobCount": job_count,
+                    "downloadLinks": {
+                        "json": "https://api.apify.com/v2/key-value-stores/{STORE_ID}/records/linkedin_jobs.json",
+                        "csv": "https://api.apify.com/v2/key-value-stores/{STORE_ID}/records/linkedin_jobs.csv"
+                    },
+                    "note": "Replace {STORE_ID} with your actual store ID from the Apify console"
+                })
+                
+            except Exception as e:
+                Actor.log.error(f"Error processing output files: {e}")
+        else:
+            Actor.log.warning("No output files were created. The scraper may have failed to find any jobs.")
