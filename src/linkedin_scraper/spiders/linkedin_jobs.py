@@ -30,8 +30,12 @@ class LinkedinJobsSpider(scrapy.Spider):
         self.start_urls_list = start_urls or []
         self.debug = debug
         
-        # Log debug status
-        if self.debug:
+        # Configure logging based on debug flag
+        if not self.debug:
+            # Disable certain types of logging when debug is off
+            self.logger.setLevel('INFO')
+        else:
+            # Log debug status
             self.logger.info("Debug mode is enabled - detailed output will be shown")
     
     def start_requests(self):
@@ -127,8 +131,9 @@ class LinkedinJobsSpider(scrapy.Spider):
                 # Extract posted date if available
                 date_posted = job_card.css("time::attr(datetime)").get()
                 
+                # Only log detailed info in debug mode
                 if self.debug:
-                    self.logger.info(f"Found job: {job_title} at {company_name} in {location}")
+                    self.logger.debug(f"Found job: {job_title} at {company_name} in {location}")
                 
                 yield scrapy.Request(
                     url=job_link,
@@ -182,11 +187,13 @@ class LinkedinJobsSpider(scrapy.Spider):
         # Add timestamp
         job_item["scraped_at"] = datetime.now().isoformat()
         
-        # Log detailed job information in debug mode
-        if self.debug:
-            self.logger.info(f"Scraped job details: {job_item['job_title']} at {job_item['company_name']}")
-            self.logger.debug(f"Full job data: {json.dumps(dict(job_item), ensure_ascii=False)}")
+        # In non-debug mode, only log minimal information
+        if not self.debug:
+            self.logger.info(f"Scraped job: {job_item['job_title']} at {job_item['company_name']}")
         else:
-            self.logger.info(f"Scraped job: {job_item['job_title']}")
+            # In debug mode, log detailed information
+            self.logger.debug(f"Scraped job details: {job_item['job_title']} at {job_item['company_name']}")
+            self.logger.debug(f"Full job data: {json.dumps({k: v for k, v in dict(job_item).items() if k != 'job_description'}, ensure_ascii=False)}")
+            self.logger.debug(f"Job description length: {len(job_item.get('job_description', ''))}")
         
         yield job_item

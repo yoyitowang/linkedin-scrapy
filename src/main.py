@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import json
+import logging
 from apify import Actor
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
@@ -56,6 +57,22 @@ async def main() -> None:
         
         # Get Scrapy project settings
         settings = get_project_settings()
+        
+        # Configure logging based on debug flag
+        if not debug:
+            # Set higher log level to suppress detailed output when debug is False
+            settings.set('LOG_LEVEL', 'INFO')
+            # Disable default Scrapy debug output
+            settings.set('LOG_ENABLED', True)
+            # Filter out certain loggers
+            settings.set('LOG_FORMATTER', 'src.linkedin_scraper.formatters.LinkedInLogFormatter')
+            # Disable item printing in logs
+            settings.set('LOG_STDOUT', False)
+            settings.set('LOG_FORMATTER_KEYS', ['levelname', 'message'])
+        else:
+            # In debug mode, show all logs
+            settings.set('LOG_LEVEL', 'DEBUG')
+            settings.set('LOG_ENABLED', True)
         
         # Update settings for output
         settings.set('FEEDS', {
