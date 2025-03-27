@@ -19,14 +19,16 @@ class LinkedinJobsSpider(scrapy.Spider):
         'CONCURRENT_REQUESTS': 1,  # Limit concurrent requests
     }
     
-    def __init__(self, keyword=None, location=None, username=None, password=None, max_pages=5, start_urls=None, debug=False, *args, **kwargs):
+    def __init__(self, keyword=None, location=None, username=None, password=None, max_pages=5, max_jobs=0, start_urls=None, debug=False, *args, **kwargs):
         super(LinkedinJobsSpider, self).__init__(*args, **kwargs)
         self.keyword = keyword
         self.location = location
         self.linkedin_username = username
         self.linkedin_password = password
         self.max_pages = int(max_pages)
+        self.max_jobs = int(max_jobs)  # New parameter for job count limit
         self.page_count = 0
+        self.job_count = 0  # Counter for scraped jobs
         self.start_urls_list = start_urls or []
         self.debug = debug
         
@@ -37,6 +39,10 @@ class LinkedinJobsSpider(scrapy.Spider):
         else:
             # Log debug status
             self.logger.info("Debug mode is enabled - detailed output will be shown")
+            
+        # Log job limit if set
+        if self.max_jobs > 0:
+            self.logger.info(f"Job limit set: Will scrape a maximum of {self.max_jobs} jobs")
     
     def start_requests(self):
         """Start with either login page or direct URLs"""
@@ -105,6 +111,11 @@ class LinkedinJobsSpider(scrapy.Spider):
     
     def parse_search_results(self, response):
         """Parse the job search results page"""
+        # Check if we've reached the job limit
+        if self.max_jobs > 0 and self.job_count >= self.max_jobs:
+            self.logger.info(f"Reached the maximum job count limit ({self.max_jobs}). Stopping the scraper.")
+            return
+            
         self.page_count += 1
         self.logger.info(f"Parsing search results page {self.page_count} from: {response.url}")
         
@@ -112,6 +123,11 @@ class LinkedinJobsSpider(scrapy.Spider):
         job_cards = response.css("div.base-card")
         
         for job_card in job_cards:
+            # Check if we've reached the job limit
+            if self.max_jobs > 0 and self.job_count >= self.max_jobs:
+                self.logger.info(f"Reached the maximum job count limit ({self.max_jobs}). Stopping further job parsing.")
+                return
+                
             job_link = job_card.css("a.base-card__full-link::attr(href)").get()
             
             if job_link:
@@ -146,14 +162,22 @@ class LinkedinJobsSpider(scrapy.Spider):
                     }
                 )
         
-        # Follow pagination if we haven't reached max_pages
-        if self.page_count < self.max_pages:
+        # Follow pagination if we haven't reached max_pages and haven't hit the job limit
+        if self.page_count < self.max_pages and (self.max_jobs == 0 or self.job_count < self.max_jobs):
             next_page = response.css("a.artdeco-pagination__button--next::attr(href)").get()
             if next_page:
                 yield response.follow(next_page, callback=self.parse_search_results)
     
     def parse_job_details(self, response):
         """Parse the job details page"""
+        # Check if we've reached the job limit
+        if self.max_jobs > 0 and self.job_count >= self.max_jobs:
+            self.logger.info(f"Reached the maximum job count limit ({self.max_jobs}). Skipping job.")
+            return
+            
+        # Increment job counter
+        self.job_count += 1
+        
         # Create job item
         job_item = LinkedinJobItem()
         
@@ -189,10 +213,10 @@ class LinkedinJobsSpider(scrapy.Spider):
         
         # In non-debug mode, only log minimal information
         if not self.debug:
-            self.logger.info(f"Scraped job: {job_item['job_title']} at {job_item['company_name']}")
+            self.logger.info(f"Scraped job {self.job_count}: {job_item['job_title']} at {job_item['company_name']}")
         else:
             # In debug mode, log detailed information
-            self.logger.debug(f"Scraped job details: {job_item['job_title']} at {job_item['company_name']}")
+            self.logger.debug(f"Scraped job {self.job_count} details: {job_item['job_title']} at {job_item['company_name']}")
             self.logger.debug(f"Full job data: {json.dumps({k: v for k, v in dict(job_item).items() if k != 'job_description'}, ensure_ascii=False)}")
             self.logger.debug(f"Job description length: {len(job_item.get('job_description', ''))}")
         

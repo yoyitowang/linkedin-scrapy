@@ -37,6 +37,15 @@
             "maximum": 100,
             "editor": "number"
         },
+        "max_jobs": {
+            "title": "Maximum Jobs",
+            "type": "integer",
+            "description": "Maximum number of job listings to scrape (0 for unlimited)",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 1000,
+            "editor": "number"
+        },
         "start_urls": {
             "title": "Start URLs (Optional)",
             "type": "array",

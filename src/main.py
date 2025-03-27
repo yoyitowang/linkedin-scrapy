@@ -31,6 +31,7 @@ async def main() -> None:
         linkedin_username = actor_input.get('linkedin_username')
         linkedin_password = actor_input.get('linkedin_password')
         max_pages = actor_input.get('max_pages', 5)
+        max_jobs = actor_input.get('max_jobs', 0)  # New parameter for job count limit
         start_urls = [url.get('url') for url in actor_input.get('start_urls', [])]
         debug = actor_input.get('debug', False)
         
@@ -47,6 +48,10 @@ async def main() -> None:
             Actor.log.info(f"Starting LinkedIn job scraping for {len(start_urls)} specific URLs")
             
         Actor.log.info(f"Debug mode: {'enabled' if debug else 'disabled'}")
+        
+        # Log job limit if set
+        if max_jobs > 0:
+            Actor.log.info(f"Job limit set: Will scrape a maximum of {max_jobs} jobs")
         
         # Configure output paths for Apify dataset
         dataset_dir = os.path.join(os.environ.get('APIFY_LOCAL_STORAGE_DIR', ''), 'datasets', 'default')
@@ -94,6 +99,7 @@ async def main() -> None:
             'username': linkedin_username,
             'password': linkedin_password,
             'max_pages': max_pages,
+            'max_jobs': max_jobs,  # Pass the new parameter
             'start_urls': start_urls,
             'debug': debug
         }
@@ -111,7 +117,7 @@ async def main() -> None:
         # Log completion
         Actor.log.info("LinkedIn job scraping completed")
         
-        # Check if output files were created and push them as named key-value store
+        # Check if output files were created
         if os.path.exists(json_output):
             # Read the JSON file to get the count of jobs
             try:
@@ -121,22 +127,19 @@ async def main() -> None:
                     
                 Actor.log.info(f"Successfully scraped {job_count} LinkedIn jobs")
                 
-                # Push the files to key-value store for easy download
+                # Push a summary of the results to the dataset
                 await Actor.push_data({
                     "jobCount": job_count,
                     "message": f"Successfully scraped {job_count} LinkedIn jobs",
-                    "downloadLinks": {
-                        "json": "linkedin_jobs_output.json",
-                        "csv": "linkedin_jobs_output.csv"
+                    "searchParams": {
+                        "keyword": keyword,
+                        "location": location,
+                        "maxJobs": max_jobs,
+                        "maxPages": max_pages
                     }
                 })
                 
-                # Store the output files in the default key-value store
-                await Actor.value_store().set('linkedin_jobs_output.json', open(json_output, 'rb').read())
-                if os.path.exists(csv_output):
-                    await Actor.value_store().set('linkedin_jobs_output.csv', open(csv_output, 'rb').read())
-                
             except Exception as e:
-                Actor.log.error(f"Error processing output files: {e}")
+                Actor.log.error(f"Error reading output files: {e}")
         else:
             Actor.log.warning("No output files were created. The scraper may have failed to find any jobs.")
