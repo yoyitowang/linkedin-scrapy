@@ -1,9 +1,83 @@
-# This file tells Git which files shouldn't be added to source control
+# Apify storage
+apify_storage/
 
+# Credentials and sensitive information
+.env
+*.pem
+*.key
+credentials.json
+*_credentials.*
+linkedin_credentials.json
+auth.json
+secrets.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+.env/
+.venv
+.env
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+.project
+.pydevproject
+.settings/
 .DS_Store
-.idea
-.vscode
-dist
-node_modules
-apify_storage
-storage
+
+# Scrapy specific
+.scrapy
+
+# Logs and databases
+*.log
+*.sqlite
+*.db
+logs/
+log/
+
+# Output files
+output/
+*.csv
+*.xlsx
+*.xls
+*.json
+!apify_storage/key_value_stores/default/INPUT.json
+!.actor/input_schema.json
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+.temp/
+
+# Debugging
+.pytest_cache/
+.coverage
+htmlcov/

@@ -6,33 +6,49 @@
         "keyword": {
             "title": "Job Keyword",
             "type": "string",
-            "description": "The job title or keyword to search for on LinkedIn",
-            "editor": "textfield",
-            "default": "software engineer"
+            "description": "Job search keyword (e.g., 'python developer')",
+            "editor": "textfield"
         },
         "location": {
             "title": "Job Location",
             "type": "string",
-            "description": "The location to search for jobs",
+            "description": "Job location (e.g., 'San Francisco, CA')",
+            "editor": "textfield"
+        },
+        "linkedin_username": {
+            "title": "LinkedIn Username",
+            "type": "string",
+            "description": "LinkedIn username/email for authentication (recommended for better results)",
+            "editor": "textfield"
+        },
+        "linkedin_password": {
+            "title": "LinkedIn Password",
+            "type": "string",
+            "description": "LinkedIn password for authentication",
             "editor": "textfield",
-            "default": "United States"
+            "isSecret": true
         },
-        "startUrls": {
-            "title": "Start URLs",
-            "type": "array",
-            "description": "URLs to start with. Default is LinkedIn homepage.",
-            "editor": "requestListSources",
-            "prefill": [
-                {
-                    "url": "https://www.linkedin.com/"
-                }
-            ]
-        },
-        "maxRequestsPerCrawl": {
-            "title": "Max Requests per Crawl",
+        "max_pages": {
+            "title": "Maximum Pages",
             "type": "integer",
-            "description": "Maximum number of requests that can be made by this crawler.",
-            "default": 50
+            "description": "Maximum number of search result pages to scrape",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 100,
+            "editor": "number"
+        },
+        "start_urls": {
+            "title": "Start URLs (Optional)",
+            "type": "array",
+            "description": "Optional: Specific LinkedIn job URLs to scrape directly",
+            "editor": "requestListSources"
+        },
+        "debug": {
+            "title": "Debug Mode",
+            "type": "boolean",
+            "description": "Enable debug mode to print detailed output",
+            "default": false,
+            "editor": "checkbox"
         }
     },
     "required": ["keyword", "location"]
