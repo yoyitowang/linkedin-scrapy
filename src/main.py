@@ -127,6 +127,11 @@ def run_standalone_scraper(
     
     # After crawling is done, create a symlink to the latest output
     try:
+        # First check if the output file exists and has content
+        if not os.path.exists(json_output) or os.path.getsize(json_output) == 0:
+            print(f"Warning: Output file {json_output} does not exist or is empty.")
+            return json_output
+            
         # If on Windows, we need to handle symlinks differently
         if os.name == 'nt':  # Windows
             # On Windows, just copy the file instead of creating a symlink
@@ -137,9 +142,9 @@ def run_standalone_scraper(
             print(f"Created copy of latest output at: {latest_output}")
         else:  # Unix-like systems
             # Remove existing symlink if it exists
-            if os.path.exists(latest_output):
-                os.remove(latest_output)
-            # Create symlink
+            if os.path.exists(latest_output) or os.path.islink(latest_output):
+                os.unlink(latest_output)  # Use unlink instead of remove for symlinks
+            # Create symlink - use relative path to make it more portable
             os.symlink(os.path.basename(json_output), latest_output)
             print(f"Created symlink to latest output at: {latest_output}")
     except Exception as e:
@@ -149,6 +154,8 @@ def run_standalone_scraper(
     try:
         standard_output = os.path.join(dataset_dir, 'linkedin_jobs_output.json')
         import shutil
+        if os.path.exists(standard_output):
+            os.remove(standard_output)
         shutil.copy2(json_output, standard_output)
         print(f"Copied output to standard location: {standard_output}")
     except Exception as e:
@@ -359,11 +366,23 @@ async def process_apify_output(json_output: str, csv_output: str) -> None:
             # Get the default dataset
             default_dataset = await Actor.open_dataset()
             
-            # Push data to the dataset one by one to ensure each record is properly saved
-            for job in jobs_data:
-                await default_dataset.push_data(job)
-            
-            Actor.log.info(f"Pushed {job_count} jobs to Apify dataset individually")
+            # Push data to the dataset in batches to improve performance
+            try:
+                # Push all data at once - this is more efficient
+                await default_dataset.push_data(jobs_data)
+                Actor.log.info(f"Successfully pushed {job_count} jobs to Apify dataset in batch")
+            except Exception as batch_error:
+                Actor.log.warning(f"Batch push failed: {batch_error}. Trying individual pushes...")
+                # Fallback to individual pushes if batch fails
+                success_count = 0
+                for job in jobs_data:
+                    try:
+                        await default_dataset.push_data(job)
+                        success_count += 1
+                    except Exception as e:
+                        Actor.log.error(f"Failed to push job: {str(e)}")
+                
+                Actor.log.info(f"Pushed {success_count}/{job_count} jobs to Apify dataset individually")
             
             # Generate CSV from the dataset
             try:
@@ -401,10 +420,10 @@ async def process_apify_output(json_output: str, csv_output: str) -> None:
             try:
                 default_key_value_store = await Actor.open_key_value_store()
                 
-                # Store the JSON data
+                # Store the JSON data - pass the Python object directly
                 await default_key_value_store.set_value(
                     'linkedin_jobs.json', 
-                    json.dumps(jobs_data, ensure_ascii=False, indent=2), 
+                    jobs_data,  # Pass the Python object directly, SDK handles serialization
                     content_type='application/json'
                 )
                 Actor.log.info("Saved JSON output to key-value store")
