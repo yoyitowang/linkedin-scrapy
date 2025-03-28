@@ -1,5 +1,6 @@
 import scrapy
 import json
+import re
 import time
 from datetime import datetime
 from urllib.parse import urlencode
@@ -153,6 +154,16 @@ class LinkedinJobsSpider(scrapy.Spider):
                 # Extract posted date if available
                 date_posted = job_card.css("time::attr(datetime)").get()
                 
+                # Extract company logo if available
+                company_logo = job_card.css("img.artdeco-entity-image::attr(src)").get()
+                
+                # Extract job ID from the URL
+                job_id = None
+                if job_link:
+                    match = re.search(r'view/(\d+)', job_link)
+                    if match:
+                        job_id = match.group(1)
+                
                 # Only log detailed info in debug mode
                 if self.debug:
                     self.logger.debug(f"Found job: {job_title} at {company_name} in {location}")
@@ -164,7 +175,9 @@ class LinkedinJobsSpider(scrapy.Spider):
                         "job_title": job_title,
                         "company_name": company_name,
                         "location": location,
-                        "date_posted": date_posted
+                        "date_posted": date_posted,
+                        "company_logo": company_logo,
+                        "job_id": job_id
                     }
                 )
         
@@ -174,8 +187,52 @@ class LinkedinJobsSpider(scrapy.Spider):
             if next_page:
                 yield response.follow(next_page, callback=self.parse_search_results)
     
+    def extract_json_data(self, response):
+        """Extract structured JSON data from the page source"""
+        # Try to find job data in script tags
+        script_data = response.xpath('//script[contains(text(), "jobPostingInfo") or contains(text(), "companyInfo") or contains(text(), "jobData")]/text()').getall()
+        
+        job_data = {}
+        
+        for script in script_data:
+            # Look for different data patterns
+            patterns = [
+                r'(\{"data":\{"jobPostingInfo":.*?\})(?=;)',
+                r'(\{"data":\{"companyInfo":.*?\})(?=;)',
+                r'(\{"data":\{"jobData":.*?\})(?=;)',
+                r'(window\.INITIAL_STATE\s*=\s*\{.*?\})(?=;)',
+                r'(\{.*?"jobPostingId":.*?\})(?=;)',
+                r'(\{.*?"companyId":.*?\})(?=;)'
+            ]
+            
+            for pattern in patterns:
+                matches = re.search(pattern, script, re.DOTALL)
+                if matches:
+                    try:
+                        data = json.loads(matches.group(1))
+                        # Merge with existing data
+                        job_data.update(data)
+                    except json.JSONDecodeError:
+                        self.logger.warning("Failed to parse JSON data from script")
+        
+        return job_data
+    
+    def clean_html(self, html_text):
+        """Clean HTML content"""
+        if not html_text:
+            return ""
+        
+        # Remove script and style elements
+        html_text = re.sub(r'<script.*?>.*?</script>', '', html_text, flags=re.DOTALL)
+        html_text = re.sub(r'<style.*?>.*?</style>', '', html_text, flags=re.DOTALL)
+        
+        # Convert <br> to newlines for better readability in plain text
+        html_text = re.sub(r'<br\s*/?>|<br\s*/?>', '\n', html_text)
+        
+        return html_text.strip()
+    
     def parse_job_details(self, response):
-        """Parse the job details page"""
+        """Parse the job details page with enhanced data extraction"""
         # Check if we've reached the job limit
         if self.max_jobs > 0 and self.job_count >= self.max_jobs:
             self.logger.info(f"✅ Reached the maximum job count limit ({self.max_jobs}). Skipping job.")
@@ -187,23 +244,76 @@ class LinkedinJobsSpider(scrapy.Spider):
         # Create job item
         job_item = LinkedinJobItem()
         
-        # Extract data from meta or directly from the page if not available
-        job_item["job_title"] = response.meta.get("job_title") or response.css("h1.top-card-layout__title::text").get().strip()
-        job_item["company_name"] = response.meta.get("company_name") or response.css("a.topcard__org-name-link::text").get().strip()
-        job_item["location"] = response.meta.get("location") or response.css("span.topcard__flavor--bullet::text").get().strip()
-        job_item["job_url"] = response.url
-        job_item["date_posted"] = response.meta.get("date_posted")
+        # Try to extract structured data from the page
+        json_data = self.extract_json_data(response)
         
-        # Extract job ID from URL
-        job_id = response.url.split("?")[0].split("-")[-1]
-        job_item["job_id"] = job_id
+        # Extract data from meta or directly from the page if not available
+        job_item["title"] = response.meta.get("job_title") or response.css("h1.top-card-layout__title::text").get().strip()
+        job_item["companyName"] = response.meta.get("company_name") or response.css("a.topcard__org-name-link::text").get().strip()
+        job_item["location"] = response.meta.get("location") or response.css("span.topcard__flavor--bullet::text").get().strip()
+        job_item["link"] = response.url
+        
+        # Extract job ID from URL or meta
+        job_id = response.meta.get("job_id")
+        if not job_id:
+            match = re.search(r'view/(\d+)', response.url)
+            if match:
+                job_id = match.group(1)
+        
+        job_item["id"] = job_id
+        
+        # Extract posted date and convert to timestamp
+        posted_date = response.meta.get("date_posted") or response.css("span.posted-time-ago__text::text").get()
+        if posted_date:
+            job_item["postedAt"] = posted_date
+            # Try to convert to timestamp if it's in ISO format
+            try:
+                dt = datetime.fromisoformat(posted_date.replace('Z', '+00:00'))
+                job_item["postedAtTimestamp"] = int(dt.timestamp() * 1000)
+            except (ValueError, TypeError):
+                pass
         
         # Extract job description
         job_description = response.css("div.description__text").get()
         if job_description:
-            job_item["job_description"] = job_description
+            job_item["descriptionText"] = self.clean_html(job_description)
         
-        # Extract additional details if available
+        # Extract company logo
+        company_logo = response.meta.get("company_logo") or response.css("img.artdeco-entity-image::attr(src)").get()
+        if company_logo:
+            job_item["companyLogo"] = company_logo
+        
+        # Extract company LinkedIn URL
+        company_url = response.css("a.topcard__org-name-link::attr(href)").get()
+        if company_url:
+            job_item["companyLinkedinUrl"] = response.urljoin(company_url)
+        
+        # Extract application URL
+        apply_url = response.css("a.apply-button::attr(href)").get()
+        if apply_url:
+            job_item["applyUrl"] = apply_url
+        
+        # Check if this is an Easy Apply job
+        easy_apply_button = response.css("button.jobs-apply-button").get()
+        job_item["easyApply"] = bool(easy_apply_button)
+        
+        # Extract company description
+        company_description = response.css("div.company-description__text::text").get()
+        if company_description:
+            job_item["companyDescription"] = company_description.strip()
+        
+        # Extract workplace type
+        workplace_types = []
+        workplace_type_elements = response.css("li.job-details-jobs-unified-top-card__workplace-type")
+        for element in workplace_type_elements:
+            workplace_type = element.css("::text").get()
+            if workplace_type:
+                workplace_types.append({"localizedName": workplace_type.strip()})
+        
+        if workplace_types:
+            job_item["jobWorkplaceTypes"] = workplace_types
+        
+        # Extract job criteria (employment type, seniority level, etc.)
         job_criteria = response.css("li.description__job-criteria-item")
         for criteria in job_criteria:
             criteria_type = criteria.css("h3.description__job-criteria-subheader::text").get().strip()
@@ -214,24 +324,103 @@ class LinkedinJobsSpider(scrapy.Spider):
             elif "Employment" in criteria_type:
                 job_item["employment_type"] = criteria_value
         
+        # Extract insights about connections
+        insights = response.css("span.jobs-unified-top-card__subtitle-secondary-grouping span.jobs-unified-top-card__bullet::text").getall()
+        if insights:
+            cleaned_insights = [insight.strip() for insight in insights if "connection" in insight.lower()]
+            if cleaned_insights:
+                job_item["insights"] = cleaned_insights
+        
+        # Extract skills from the job description
+        skills = []
+        skills_section = response.css("div.description__text ul li::text").getall()
+        for skill in skills_section:
+            if len(skill.strip()) > 0 and len(skill.strip()) < 50:  # Simple heuristic for skill-like text
+                skills.append(skill.strip())
+        
+        if skills:
+            job_item["skills"] = skills[:10]  # Limit to top 10 skills
+        
+        # Populate backward compatibility fields
+        job_item["job_id"] = job_id
+        job_item["job_title"] = job_item["title"]
+        job_item["company_name"] = job_item["companyName"]
+        job_item["job_url"] = job_item["link"]
+        job_item["job_description"] = job_item.get("descriptionText")
+        job_item["date_posted"] = job_item.get("postedAt")
+        
         # Add timestamp
         job_item["scraped_at"] = datetime.now().isoformat()
         
+        # Extract additional data from JSON if available
+        if json_data:
+            self.extract_additional_data_from_json(job_item, json_data)
+        
         # In non-debug mode, only log minimal information
         if not self.debug:
-            self.logger.info(f"Scraped job {self.job_count}: {job_item['job_title']} at {job_item['company_name']}")
+            self.logger.info(f"Scraped job {self.job_count}: {job_item['title']} at {job_item['companyName']}")
         else:
             # In debug mode, log detailed information
-            self.logger.debug(f"Scraped job {self.job_count} details: {job_item['job_title']} at {job_item['company_name']}")
-            self.logger.debug(f"Full job data: {json.dumps({k: v for k, v in dict(job_item).items() if k != 'job_description'}, ensure_ascii=False)}")
-            self.logger.debug(f"Job description length: {len(job_item.get('job_description', ''))}")
+            self.logger.debug(f"Scraped job {self.job_count} details: {job_item['title']} at {job_item['companyName']}")
+            self.logger.debug(f"Full job data: {json.dumps({k: v for k, v in dict(job_item).items() if k != 'descriptionText'}, ensure_ascii=False)}")
+            self.logger.debug(f"Job description length: {len(job_item.get('descriptionText', ''))}")
         
         # Check if we've reached the job limit after processing this job
         if self.max_jobs > 0 and self.job_count >= self.max_jobs:
             self.logger.info(f"✅ Reached the maximum job count limit ({self.max_jobs}). This is the final job.")
-            # The spider will be closed after yielding this item
         
         yield job_item
         
         # Check job limit after yielding the item
         self.check_job_limit()
+    
+    def extract_additional_data_from_json(self, job_item, json_data):
+        """Extract additional data from JSON structure"""
+        try:
+            # Navigate through the JSON structure to find job data
+            job_data = None
+            
+            # Check different possible paths in the JSON structure
+            if 'data' in json_data and 'jobPostingInfo' in json_data['data']:
+                job_data = json_data['data']['jobPostingInfo']
+            elif 'jobPostingInfo' in json_data:
+                job_data = json_data['jobPostingInfo']
+            elif 'data' in json_data and 'jobData' in json_data['data']:
+                job_data = json_data['data']['jobData']
+            
+            if not job_data:
+                return
+            
+            # Extract job data fields
+            fields_to_extract = [
+                'isReposted', 'posterId', 'easyApply', 'isPromoted', 
+                'jobState', 'contentSource', 'companyWebsite', 'companySlogan',
+                'companyEmployeesCount'
+            ]
+            
+            for field in fields_to_extract:
+                if field in job_data:
+                    job_item[field] = job_data[field]
+            
+            # Extract applicant insights
+            if 'jobApplicantInsights' in job_data:
+                job_item['jobApplicantInsights'] = job_data['jobApplicantInsights']
+            
+            # Extract company data
+            if 'company' in job_data:
+                job_item['company'] = job_data['company']
+            
+            # Extract salary data
+            if 'salary' in job_data:
+                job_item['salary'] = job_data['salary']
+            
+            # Extract recruiter data
+            if 'recruiter' in job_data:
+                job_item['recruiter'] = job_data['recruiter']
+            
+            # Extract skills
+            if 'skills' in job_data and not job_item.get('skills'):
+                job_item['skills'] = job_data['skills']
+            
+        except Exception as e:
+            self.logger.warning(f"Error extracting additional data from JSON: {e}")

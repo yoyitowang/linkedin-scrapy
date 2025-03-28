@@ -5,12 +5,14 @@ import os
 import json
 import logging
 import traceback
+import re
 from datetime import datetime
 from itemadapter import ItemAdapter
 
 class LinkedinJobPipeline:
     """
     Pipeline for processing and cleaning LinkedIn job items
+    Enhanced for v2.0.0 to handle the richer data model
     """
     
     def __init__(self):
@@ -38,11 +40,11 @@ class LinkedinJobPipeline:
         
         # Add a test item to verify pipeline is working
         self.test_item = {
-            "job_id": "test_job_id",
-            "job_title": "Test Job Title",
-            "company_name": "Test Company",
+            "id": "test_job_id",
+            "title": "Test Job Title",
+            "companyName": "Test Company",
             "location": "Test Location",
-            "job_url": "https://www.linkedin.com/jobs/view/test-job-id",
+            "link": "https://www.linkedin.com/jobs/view/test-job-id",
             "scraped_at": datetime.now().isoformat(),
             "is_test_item": True
         }
@@ -71,28 +73,40 @@ class LinkedinJobPipeline:
     
     def process_item(self, item, spider):
         """
-        Process each scraped job item
+        Process each scraped job item with enhanced data cleaning
         """
         try:
-            spider.logger.info(f"Pipeline received job item: {item.get('job_title', 'Unknown title')}")
+            spider.logger.info(f"Pipeline received job item: {item.get('title', item.get('job_title', 'Unknown title'))}")
             
             adapter = ItemAdapter(item)
             
             # Clean text fields
-            for field in ['job_title', 'company_name', 'location', 'employment_type', 'seniority_level']:
+            text_fields = [
+                'title', 'companyName', 'location', 'employment_type', 
+                'seniority_level', 'companyDescription', 'companySlogan'
+            ]
+            
+            for field in text_fields:
                 if adapter.get(field):
                     adapter[field] = self._clean_text(adapter[field])
             
             # Clean HTML in job description
-            if adapter.get('job_description'):
-                adapter['job_description'] = self._clean_html(adapter['job_description'])
+            html_fields = ['descriptionText', 'job_description']
+            for field in html_fields:
+                if adapter.get(field):
+                    adapter[field] = self._clean_html(adapter[field])
             
             # Ensure job_id is present
-            if not adapter.get('job_id') and adapter.get('job_url'):
+            if not adapter.get('id') and adapter.get('link'):
                 try:
-                    adapter['job_id'] = adapter['job_url'].split('?')[0].split('-')[-1]
+                    match = re.search(r'view/(\d+)', adapter['link'])
+                    if match:
+                        adapter['id'] = match.group(1)
                 except Exception as e:
-                    spider.logger.warning(f"Could not extract job_id from URL: {adapter.get('job_url')} - {e}")
+                    spider.logger.warning(f"Could not extract job_id from URL: {adapter.get('link')} - {e}")
+            
+            # Ensure backward compatibility fields are populated
+            self._ensure_backward_compatibility(adapter)
             
             # Add timestamp if not present
             if not adapter.get('scraped_at'):
@@ -117,6 +131,28 @@ class LinkedinJobPipeline:
             spider.logger.error(traceback.format_exc())
             return item
     
+    def _ensure_backward_compatibility(self, adapter):
+        """Ensure backward compatibility with the old field names"""
+        # Map new field names to old field names
+        field_mapping = {
+            'id': 'job_id',
+            'title': 'job_title',
+            'companyName': 'company_name',
+            'link': 'job_url',
+            'descriptionText': 'job_description',
+            'postedAt': 'date_posted'
+        }
+        
+        # Copy values from new fields to old fields
+        for new_field, old_field in field_mapping.items():
+            if adapter.get(new_field) and not adapter.get(old_field):
+                adapter[old_field] = adapter[new_field]
+        
+        # Copy values from old fields to new fields
+        for new_field, old_field in field_mapping.items():
+            if adapter.get(old_field) and not adapter.get(new_field):
+                adapter[new_field] = adapter[old_field]
+    
     def _clean_text(self, text):
         """
         Clean text by removing extra whitespace
@@ -127,10 +163,15 @@ class LinkedinJobPipeline:
     
     def _clean_html(self, html):
         """
-        Basic HTML cleaning - could be expanded with more sophisticated cleaning
+        Enhanced HTML cleaning
         """
         if not html:
             return ""
+            
+        # Remove script and style elements
+        html = re.sub(r'<script.*?>.*?</script>', '', html, flags=re.DOTALL)
+        html = re.sub(r'<style.*?>.*?</style>', '', html, flags=re.DOTALL)
+        
         return html.strip()
     
     def _write_json_backup(self):
@@ -186,12 +227,12 @@ class LinkedinJobPipeline:
             if len(self.items) <= 1:
                 spider.logger.warning("No real jobs found. Adding a dummy job for demonstration.")
                 dummy_job = {
-                    "job_id": "dummy_job_id",
-                    "job_title": "Dummy Job Title - No real jobs were scraped",
-                    "company_name": "Dummy Company",
+                    "id": "dummy_job_id",
+                    "title": "Dummy Job Title - No real jobs were scraped",
+                    "companyName": "Dummy Company",
                     "location": "Dummy Location",
-                    "job_url": "https://www.linkedin.com/jobs/view/dummy-job-id",
-                    "job_description": "<p>This is a dummy job created because no real jobs were scraped. This could be due to LinkedIn's anti-scraping measures or incorrect search parameters.</p>",
+                    "link": "https://www.linkedin.com/jobs/view/dummy-job-id",
+                    "descriptionText": "<p>This is a dummy job created because no real jobs were scraped. This could be due to LinkedIn's anti-scraping measures or incorrect search parameters.</p>",
                     "scraped_at": datetime.now().isoformat(),
                     "is_dummy_item": True,
                     "note": "No real jobs were found during scraping. Check your search parameters and LinkedIn access."
