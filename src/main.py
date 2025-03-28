@@ -107,20 +107,20 @@ async def main() -> None:
         # Log completion
         Actor.log.info("LinkedIn job scraping completed")
         
-        # After the crawler is done, push all collected data to Apify dataset
+        # After the crawler is done, push all collected job data to Apify dataset
         if os.path.exists(json_output):
             try:
                 # Read the collected data from the JSON file
                 with open(json_output, 'r', encoding='utf-8') as f:
                     jobs_data = json.load(f)
                 
-                # Count the actual jobs (excluding the summary)
-                job_count = len([item for item in jobs_data if item.get('type') != 'summary'])
+                # Log the count but don't push this to the dataset
+                job_count = len(jobs_data)
                 Actor.log.info(f"Successfully scraped {job_count} LinkedIn jobs")
                 
-                # Push all data to Apify dataset at once
-                for item in jobs_data:
-                    await Actor.push_data(item)
+                # Push only the job data to Apify dataset
+                for job in jobs_data:
+                    await Actor.push_data(job)
                 
                 # Store CSV and JSON as named keys in the default key-value store
                 # This makes them available for download from the Apify UI
@@ -144,17 +144,6 @@ async def main() -> None:
                             content_type='text/csv'
                         )
                     Actor.log.info("Saved CSV output for download")
-                
-                # Add a record with download links
-                await Actor.push_data({
-                    "type": "download_links",
-                    "jobCount": job_count,
-                    "downloadLinks": {
-                        "json": "https://api.apify.com/v2/key-value-stores/{STORE_ID}/records/linkedin_jobs.json",
-                        "csv": "https://api.apify.com/v2/key-value-stores/{STORE_ID}/records/linkedin_jobs.csv"
-                    },
-                    "note": "Replace {STORE_ID} with your actual store ID from the Apify console"
-                })
                 
             except Exception as e:
                 Actor.log.error(f"Error processing output files: {e}")

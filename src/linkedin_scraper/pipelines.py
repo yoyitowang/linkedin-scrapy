@@ -3,10 +3,8 @@ Pipeline for processing LinkedIn job items
 """
 import os
 import json
-import asyncio
 from datetime import datetime
 from itemadapter import ItemAdapter
-from apify import Actor
 
 class LinkedinJobPipeline:
     """
@@ -48,18 +46,18 @@ class LinkedinJobPipeline:
         if not adapter.get('scraped_at'):
             adapter['scraped_at'] = datetime.now().isoformat()
         
-        # Convert to dictionary for pushing to Apify dataset
+        # Convert to dictionary for storing
         item_dict = dict(adapter)
         
-        # Store the item in our collection for summary and backup
+        # Store the item in our collection
         self.items.append(item_dict)
         
         # Write to local JSON file as a backup
         self._write_json_backup()
         
-        # Log pushed data
+        # Log minimal info
         if spider.debug:
-            spider.logger.info(f"Processed job data: {item_dict.get('job_title')}")
+            spider.logger.info(f"Processed job: {item_dict.get('job_title')}")
         
         return item
     
@@ -120,7 +118,7 @@ class LinkedinJobPipeline:
     def close_spider(self, spider):
         """
         Called when the spider is closed
-        Push all collected data to Apify dataset at once
+        Finalize data collection
         """
         try:
             # Write CSV backup
@@ -128,29 +126,6 @@ class LinkedinJobPipeline:
             
             # Log completion
             spider.logger.info(f"LinkedIn job scraping completed. Total jobs scraped: {len(self.items)}")
-            
-            # Add a summary item
-            summary = {
-                "type": "summary",
-                "jobCount": len(self.items),
-                "message": f"Successfully scraped {len(self.items)} LinkedIn jobs",
-                "searchParams": {
-                    "keyword": getattr(spider, 'keyword', ''),
-                    "location": getattr(spider, 'location', ''),
-                    "maxJobs": getattr(spider, 'max_jobs', 0),
-                    "maxPages": getattr(spider, 'max_pages', 0)
-                },
-                "completedAt": datetime.now().isoformat()
-            }
-            
-            # Add summary to items list
-            self.items.append(summary)
-            
-            # Update the JSON backup with summary
-            self._write_json_backup()
-            
-            # Push all data to Apify dataset at once (after spider is closed)
-            # This will be handled by the main.py file
                 
         except Exception as e:
             spider.logger.error(f"Error in close_spider: {e}")
