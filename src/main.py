@@ -125,7 +125,9 @@ async def main() -> None:
         possible_paths = [
             json_output,
             os.path.abspath(json_output),
-            '/tmp/linkedin_jobs_output.json'
+            '/tmp/linkedin_jobs_output.json',
+            '/usr/src/app/apify_storage/datasets/default/linkedin_jobs_output.json',
+            './apify_storage/datasets/default/linkedin_jobs_output.json'
         ]
         
         # Try each possible path
@@ -140,7 +142,7 @@ async def main() -> None:
             except Exception as e:
                 Actor.log.warning(f"Could not read from {path}: {e}")
         
-        # If we have data (either from file or already in dataset)
+        # If we have data from the file
         if jobs_data:
             try:
                 # Log the count
@@ -150,9 +152,11 @@ async def main() -> None:
                 # Get the default dataset
                 default_dataset = await Actor.open_dataset()
                 
-                # Push all job data to the dataset at once
-                await default_dataset.push_data(jobs_data)
-                Actor.log.info(f"Pushed {job_count} jobs to Apify dataset")
+                # Push data to the dataset one by one to ensure each record is properly saved
+                for job in jobs_data:
+                    await default_dataset.push_data(job)
+                
+                Actor.log.info(f"Pushed {job_count} jobs to Apify dataset individually")
                 
                 # Generate CSV from the dataset
                 try:
