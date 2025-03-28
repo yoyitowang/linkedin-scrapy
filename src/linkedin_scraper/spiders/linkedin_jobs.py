@@ -2,9 +2,13 @@ import scrapy
 import json
 import re
 import time
+import logging
+import signal
+import sys
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 from scrapy.exceptions import CloseSpider
+from scrapy.utils.log import configure_logging
 from ..items import LinkedinJobItem
 
 
@@ -19,6 +23,17 @@ class LinkedinJobsSpider(scrapy.Spider):
         'COOKIES_ENABLED': True,
         'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'CONCURRENT_REQUESTS': 1,  # Limit concurrent requests
+        # Ensure data is written immediately when items are scraped
+        'FEEDS': {
+            'apify_storage/datasets/default/linkedin_jobs_output_%(time)s.json': {
+                'format': 'json',
+                'encoding': 'utf8',
+                'indent': 4,
+                'overwrite': True,
+            },
+        },
+        # Ensure clean shutdown
+        'CLOSESPIDER_TIMEOUT': 0,  # Disable timeout-based shutdown
     }
     
     def __init__(self, keyword=None, location=None, username=None, password=None, max_pages=5, max_jobs=0, start_urls=None, debug=False, *args, **kwargs):
@@ -34,17 +49,75 @@ class LinkedinJobsSpider(scrapy.Spider):
         self.start_urls_list = start_urls or []
         self.debug = debug
         
+        # Register signal handlers for graceful shutdown
+        self.register_shutdown_handlers()
+        
         # Configure logging based on debug flag
         if not self.debug:
-            # Disable certain types of logging when debug is off
-            self.logger.setLevel('INFO')
+            # Disable Scrapy's default logging when not in debug mode
+            self.silence_scrapy_logs()
+            # Set our logger to only show INFO and above
+            self.logger.setLevel(logging.INFO)
+            # Only show minimal, important messages
+            self.logger.info("Debug mode is disabled - only essential information will be shown")
         else:
+            # In debug mode, show all logs
+            self.logger.setLevel(logging.DEBUG)
             # Log debug status
             self.logger.info("Debug mode is enabled - detailed output will be shown")
             
         # Log job limit if set
         if self.max_jobs > 0:
             self.logger.info(f"Job limit set: Will scrape a maximum of {self.max_jobs} jobs")
+    
+    def register_shutdown_handlers(self):
+        """Register handlers for graceful shutdown on SIGTERM and SIGINT"""
+        # For SIGTERM (what Apify sends when aborting)
+        signal.signal(signal.SIGTERM, self.handle_shutdown)
+        # For SIGINT (Ctrl+C)
+        signal.signal(signal.SIGINT, self.handle_shutdown)
+    
+    def handle_shutdown(self, signum, frame):
+        """Handle graceful shutdown when receiving termination signals"""
+        signal_name = "SIGTERM" if signum == signal.SIGTERM else "SIGINT"
+        self.logger.info(f"Received {signal_name} signal - performing graceful shutdown")
+        self.logger.info(f"Scraped {self.job_count} jobs before shutdown")
+        
+        # Force the crawler to stop and save data
+        # This ensures that all collected items are written to output
+        self.crawler.engine.close_spider(self, f"Received {signal_name} signal")
+        
+        # Exit with success status
+        sys.exit(0)
+    
+    def silence_scrapy_logs(self):
+        """Silence Scrapy's default logging when not in debug mode"""
+        # Configure Scrapy's logging to be minimal
+        configure_logging(settings={
+            'LOG_LEVEL': 'ERROR',  # Only show errors
+            'LOG_ENABLED': False,  # Disable most logging
+            'LOG_STDOUT': False    # Don't log to stdout
+        })
+        
+        # Silence other commonly noisy loggers
+        for logger_name in [
+            'scrapy', 'scrapy.core.engine', 'scrapy.extensions', 
+            'scrapy.core.scraper', 'scrapy.core.downloader',
+            'twisted', 'filelock', 'hpack', 'urllib3'
+        ]:
+            logging.getLogger(logger_name).setLevel(logging.ERROR)
+            logging.getLogger(logger_name).propagate = False
+        
+        # Set our own logger to only show important messages
+        self.logger.setLevel(logging.INFO)
+        
+        # Override the spider's custom settings
+        self.custom_settings.update({
+            'LOG_LEVEL': 'ERROR',
+            'LOG_ENABLED': False,
+            'LOG_STDOUT': False,
+            'LOGSTATS_INTERVAL': 0  # Disable periodic stats logging
+        })
     
     def start_requests(self):
         """Start with either login page or direct URLs"""
@@ -219,7 +292,8 @@ class LinkedinJobsSpider(scrapy.Spider):
                         # Merge with existing data
                         job_data.update(data)
                     except json.JSONDecodeError:
-                        self.logger.warning("Failed to parse JSON data from script")
+                        if self.debug:
+                            self.logger.warning("Failed to parse JSON data from script")
         
         return job_data
     
@@ -303,7 +377,8 @@ class LinkedinJobsSpider(scrapy.Spider):
             # If it's a relative date string, use current date
             return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
         except Exception as e:
-            self.logger.warning(f"Error formatting date {date_value}: {e}")
+            if self.debug:
+                self.logger.warning(f"Error formatting date {date_value}: {e}")
             return None
     
     def parse_job_details(self, response):
@@ -345,7 +420,8 @@ class LinkedinJobsSpider(scrapy.Spider):
                 match = re.search(pattern, response.url)
                 if match:
                     job_id = match.group(1)
-                    self.logger.debug(f"Extracted job ID {job_id} using pattern: {pattern}")
+                    if self.debug:
+                        self.logger.debug(f"Extracted job ID {job_id} using pattern: {pattern}")
                     break
         
         # Method 3: Try to extract from JSON data
@@ -382,7 +458,8 @@ class LinkedinJobsSpider(scrapy.Spider):
                     else:
                         job_id = str(current)
                     
-                    self.logger.debug(f"Extracted job ID {job_id} from JSON field: {field_path}")
+                    if self.debug:
+                        self.logger.debug(f"Extracted job ID {job_id} from JSON field: {field_path}")
                     break
         
         # Final fallback: Generate a pseudo-ID if we still don't have one
@@ -390,7 +467,8 @@ class LinkedinJobsSpider(scrapy.Spider):
             # Create a deterministic hash from the URL as a last resort
             import hashlib
             job_id = f"gen-{hashlib.md5(response.url.encode()).hexdigest()[:10]}"
-            self.logger.warning(f"Could not extract real job ID, generated fallback ID: {job_id}")
+            if self.debug:
+                self.logger.warning(f"Could not extract real job ID, generated fallback ID: {job_id}")
         
         # IMPROVED JOB ID EXTRACTION - END
         
@@ -541,7 +619,8 @@ class LinkedinJobsSpider(scrapy.Spider):
                         skills = job_data['skills']
                 
             except Exception as e:
-                self.logger.warning(f"Error extracting additional data from JSON: {e}")
+                if self.debug:
+                    self.logger.warning(f"Error extracting additional data from JSON: {e}")
         
         # Record the scrape time
         scraped_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
