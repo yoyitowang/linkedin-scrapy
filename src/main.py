@@ -34,6 +34,10 @@ except ImportError:
     APIFY_AVAILABLE = False
 
 
+# Global variable to store scraped items in memory
+SCRAPED_ITEMS = []
+
+
 def run_standalone_scraper(
     keyword: str = "software developer",
     location: str = "United States",
@@ -70,16 +74,12 @@ def run_standalone_scraper(
     dataset_dir = os.path.join(apify_local_storage, 'datasets', dataset_id)
     json_output = os.path.join(dataset_dir, f'linkedin_jobs_output_{timestamp}.json')
     
-    # Also define a standard output file for Apify compatibility
-    standard_output = os.path.join(dataset_dir, 'linkedin_jobs_output.json')
-    
     # Ensure directory exists
     os.makedirs(dataset_dir, exist_ok=True)
     
     print(f"Using parameters: keyword={keyword}, location={location}, max_pages={max_pages}, max_jobs={max_jobs}")
     print(f"Debug mode: {debug}")
     print(f"Output will be written to: {json_output}")
-    print(f"Standard output will be: {standard_output}")
     
     # Configure logging based on debug flag
     log_level = logging.DEBUG if debug else logging.INFO
@@ -92,7 +92,7 @@ def run_standalone_scraper(
     settings.set('LOG_LEVEL', 'DEBUG' if debug else 'INFO')
     settings.set('LOG_ENABLED', True)
     
-    # Configure output with timestamp - ensure proper JSON array format
+    # Configure output with timestamp
     settings.set('FEEDS', {
         json_output: {
             'format': 'json',
@@ -126,20 +126,7 @@ def run_standalone_scraper(
     process.start()
     print(f"Spider finished at {datetime.datetime.now().isoformat()}.")
     
-    # Copy the output to the standard Apify output location for compatibility
-    try:
-        if os.path.exists(json_output) and os.path.getsize(json_output) > 0:
-            import shutil
-            if os.path.exists(standard_output):
-                os.remove(standard_output)
-            shutil.copy2(json_output, standard_output)
-            print(f"Copied output to standard location: {standard_output}")
-        else:
-            print(f"Warning: Output file {json_output} does not exist or is empty.")
-    except Exception as e:
-        print(f"Error copying to standard output location: {e}")
-    
-    return standard_output  # Return the standard output path for Apify compatibility
+    return json_output
 
 
 def read_input_from_file() -> Dict[str, Any]:
@@ -196,11 +183,22 @@ def read_input_from_file() -> Dict[str, Any]:
     return input_data
 
 
+# Create a custom item pipeline to collect items in memory
+class MemoryStoragePipeline:
+    def process_item(self, item, spider):
+        # Store the item in our global list
+        SCRAPED_ITEMS.append(dict(item))
+        return item
+
+
 async def run_apify_actor() -> None:
     """Run the LinkedIn scraper as an Apify Actor."""
     if not APIFY_AVAILABLE:
         print("Error: Apify package is not available. Cannot run in Actor mode.")
         return
+    
+    global SCRAPED_ITEMS
+    SCRAPED_ITEMS = []  # Reset the global items list
     
     # Enter the context of the Actor
     async with Actor:
@@ -235,21 +233,6 @@ async def run_apify_actor() -> None:
         if max_jobs > 0:
             Actor.log.info(f"Job limit set: Will scrape a maximum of {max_jobs} jobs")
         
-        # Configure output paths for local files - use the standard Docker path
-        dataset_dir = '/usr/src/app/apify_storage/datasets/default'
-        os.makedirs(dataset_dir, exist_ok=True)
-        
-        json_output = os.path.join(dataset_dir, 'linkedin_jobs_output.json')
-        csv_output = os.path.join(dataset_dir, 'linkedin_jobs.csv')
-        
-        # Ensure the output file exists with an empty array
-        try:
-            with open(json_output, 'w', encoding='utf-8') as f:
-                json.dump([], f)
-            Actor.log.info(f"Created empty output file: {json_output}")
-        except Exception as e:
-            Actor.log.warning(f"Could not create empty output file: {e}")
-        
         # Get Scrapy project settings
         settings = get_project_settings()
         
@@ -272,13 +255,11 @@ async def run_apify_actor() -> None:
         # Add debug flag to settings
         settings.set('DEBUG_MODE', debug)
         
-        # Configure specific output file for Scrapy - ensure proper JSON array format
-        settings.set('FEEDS', {
-            json_output: {
-                'format': 'json',
-                'encoding': 'utf8',
-                'indent': 4,
-            },
+        # Add our custom pipeline to collect items in memory
+        # Make sure it's at the end of the pipeline to get the fully processed items
+        settings.set('ITEM_PIPELINES', {
+            'src.linkedin_scraper.pipelines.LinkedInJobsPipeline': 300,
+            'src.main.MemoryStoragePipeline': 900,  # Higher number = later in the pipeline
         })
         
         # Configure spider parameters
@@ -300,145 +281,33 @@ async def run_apify_actor() -> None:
         # Log start of scraping
         Actor.log.info("Starting LinkedIn job scraper...")
         
-        # Run the crawler - this will collect data in the pipeline
+        # Run the crawler - this will collect data in our memory pipeline
         process.start()
         
         # Log completion
         Actor.log.info("LinkedIn job scraping completed")
         
-        # Process the output file and push to Apify dataset
-        await process_apify_output(json_output, csv_output)
+        # Process the items collected in memory
+        await process_apify_items()
 
 
-async def process_apify_output(json_output: str, csv_output: str) -> None:
-    """Process the output files for Apify.
+async def process_apify_items() -> None:
+    """Process the items collected in memory and push to Apify dataset."""
+    global SCRAPED_ITEMS
     
-    Args:
-        json_output: Path to the JSON output file
-        csv_output: Path to the CSV output file
-    """
-    # Load data from the specific output file - no need to check multiple paths
     try:
-        if not os.path.exists(json_output):
-            Actor.log.error(f"Output file not found at expected location: {json_output}")
+        # Check if we have any items
+        job_count = len(SCRAPED_ITEMS)
+        
+        if job_count == 0:
+            Actor.log.warning("No jobs were found during scraping.")
+            Actor.log.info("This could be due to:")
+            Actor.log.info("- No matching jobs found for the given criteria")
+            Actor.log.info("- LinkedIn might be blocking the scraping attempt")
+            Actor.log.info("- There might be an issue with the search parameters")
             return
             
-        if os.path.getsize(json_output) == 0:
-            Actor.log.warning(f"Output file exists but is empty: {json_output}")
-            return
-        
-        # Read the file content first to inspect and fix if needed
-        with open(json_output, 'r', encoding='utf-8') as f:
-            file_content = f.read()
-        
-        # Debug the content
-        Actor.log.info(f"File size: {len(file_content)} bytes")
-        Actor.log.info(f"First 100 characters: {file_content[:100].replace(chr(10), ' ').replace(chr(13), ' ')}")
-        
-        # Try to fix common JSON issues
-        try:
-            jobs_data = json.loads(file_content)
-        except json.JSONDecodeError as e:
-            Actor.log.warning(f"JSON decode error: {e}. Attempting to fix...")
-            
-            # Try to fix common issues with JSON format
-            if file_content.startswith('[{') and file_content.endswith('}]'):
-                # Looks like valid JSON array, but might have internal issues
-                # Let's try a line-by-line approach
-                fixed_content = []
-                try:
-                    # Split by lines and parse each job entry
-                    lines = file_content.strip().split('\n')
-                    current_job = ""
-                    in_job = False
-                    
-                    for line in lines:
-                        line = line.strip()
-                        if line.startswith('{'):
-                            in_job = True
-                            current_job = line
-                        elif line.endswith('},') and in_job:
-                            current_job += line[:-1]  # remove trailing comma
-                            try:
-                                job_obj = json.loads(current_job)
-                                fixed_content.append(job_obj)
-                                current_job = ""
-                                in_job = False
-                            except:
-                                current_job += line
-                        elif line.endswith('}') and in_job and not line.endswith('},'):
-                            current_job += line
-                            try:
-                                job_obj = json.loads(current_job)
-                                fixed_content.append(job_obj)
-                                current_job = ""
-                                in_job = False
-                            except:
-                                current_job += line
-                        elif in_job:
-                            current_job += line
-                    
-                    Actor.log.info(f"Fixed JSON parsing: Found {len(fixed_content)} job entries")
-                    jobs_data = fixed_content
-                except Exception as parse_error:
-                    Actor.log.error(f"Failed to fix JSON: {parse_error}")
-                    
-                    # Last resort: Try to extract individual job objects
-                    try:
-                        # Find all objects between { and }
-                        import re
-                        pattern = r'\{[^{}]*\}'
-                        matches = re.findall(pattern, file_content)
-                        
-                        fixed_content = []
-                        for match in matches:
-                            try:
-                                job_obj = json.loads(match)
-                                fixed_content.append(job_obj)
-                            except:
-                                pass
-                        
-                        Actor.log.info(f"Regex extraction found {len(fixed_content)} job entries")
-                        jobs_data = fixed_content
-                    except Exception as regex_error:
-                        Actor.log.error(f"Failed regex extraction: {regex_error}")
-                        return
-            else:
-                # Not a JSON array format, try to read as individual JSON objects
-                try:
-                    # Try to parse as JSONL (one JSON object per line)
-                    jobs_data = []
-                    for line in file_content.strip().split('\n'):
-                        if line.strip():
-                            try:
-                                job_obj = json.loads(line.strip())
-                                jobs_data.append(job_obj)
-                            except:
-                                pass
-                    
-                    Actor.log.info(f"Parsed as JSONL: Found {len(jobs_data)} job entries")
-                except Exception as jsonl_error:
-                    Actor.log.error(f"Failed JSONL parsing: {jsonl_error}")
-                    return
-        
-        # If we got here and jobs_data is empty or not a list, we failed to parse
-        if not jobs_data or not isinstance(jobs_data, list):
-            Actor.log.error("Failed to parse JSON data into a list of job entries")
-            
-            # Create a backup of the problematic file for debugging
-            backup_file = json_output + '.bak'
-            try:
-                import shutil
-                shutil.copy2(json_output, backup_file)
-                Actor.log.info(f"Created backup of problematic JSON at: {backup_file}")
-            except Exception as backup_error:
-                Actor.log.error(f"Failed to create backup: {backup_error}")
-            
-            return
-            
-        # Log the count
-        job_count = len(jobs_data)
-        Actor.log.info(f"Successfully loaded {job_count} LinkedIn jobs from {json_output}")
+        Actor.log.info(f"Successfully scraped {job_count} LinkedIn jobs")
         
         # Get the default dataset
         default_dataset = await Actor.open_dataset()
@@ -446,14 +315,14 @@ async def process_apify_output(json_output: str, csv_output: str) -> None:
         # Push data to the dataset in batch mode
         try:
             # Push all data at once for efficiency
-            await default_dataset.push_data(jobs_data)
+            await default_dataset.push_data(SCRAPED_ITEMS)
             Actor.log.info(f"Successfully pushed {job_count} jobs to Apify dataset in batch")
         except Exception as batch_error:
             Actor.log.warning(f"Batch push failed: {batch_error}. Trying individual pushes...")
             
             # Fallback to individual pushes if batch fails
             success_count = 0
-            for job in jobs_data:
+            for job in SCRAPED_ITEMS:
                 try:
                     await default_dataset.push_data(job)
                     success_count += 1
@@ -464,6 +333,9 @@ async def process_apify_output(json_output: str, csv_output: str) -> None:
         
         # Generate CSV from the dataset
         try:
+            # Define CSV output path
+            csv_output = '/usr/src/app/apify_storage/datasets/default/linkedin_jobs.csv'
+            
             # First try using the export_to_csv method
             await default_dataset.export_to_csv(csv_output)
             Actor.log.info(f"Exported dataset to CSV: {csv_output}")
@@ -474,7 +346,7 @@ async def process_apify_output(json_output: str, csv_output: str) -> None:
                 import csv
                 # Get all possible field names from all items
                 fieldnames = set()
-                for item in jobs_data:
+                for item in SCRAPED_ITEMS:
                     fieldnames.update(item.keys())
                 
                 # Remove HTML description to make CSV more readable
@@ -482,11 +354,12 @@ async def process_apify_output(json_output: str, csv_output: str) -> None:
                     fieldnames.remove('job_description')
                 
                 # Write to CSV
+                csv_output = '/usr/src/app/apify_storage/datasets/default/linkedin_jobs.csv'
                 with open(csv_output, 'w', newline='', encoding='utf-8') as f:
                     writer = csv.DictWriter(f, fieldnames=sorted(fieldnames))
                     writer.writeheader()
                     
-                    for item in jobs_data:
+                    for item in SCRAPED_ITEMS:
                         # Create a copy without HTML description for CSV
                         csv_item = {k: v for k, v in item.items() if k != 'job_description'}
                         writer.writerow(csv_item)
@@ -501,12 +374,13 @@ async def process_apify_output(json_output: str, csv_output: str) -> None:
             # Store the JSON data - pass the Python object directly
             await default_key_value_store.set_value(
                 'linkedin_jobs.json', 
-                jobs_data,  # Pass the Python object directly, SDK handles serialization
+                SCRAPED_ITEMS,  # Pass the Python object directly, SDK handles serialization
                 content_type='application/json'
             )
             Actor.log.info("Saved JSON output to key-value store")
             
             # Store the CSV file if it exists
+            csv_output = '/usr/src/app/apify_storage/datasets/default/linkedin_jobs.csv'
             if os.path.exists(csv_output):
                 with open(csv_output, 'rb') as f:
                     await default_key_value_store.set_value(
@@ -519,7 +393,7 @@ async def process_apify_output(json_output: str, csv_output: str) -> None:
             Actor.log.error(f"Error storing files in key-value store: {e}")
         
     except Exception as e:
-        Actor.log.error(f"Error processing output file: {e}")
+        Actor.log.error(f"Error processing scraped items: {e}")
         Actor.log.error(traceback.format_exc())
 
 
