@@ -330,41 +330,39 @@ async def process_apify_items() -> None:
             
             Actor.log.info(f"Pushed {success_count}/{job_count} jobs to Apify dataset individually")
         
-        # Generate CSV from the dataset
+        # Generate CSV directly from the items in memory
         try:
-            # Define CSV output path
-            csv_output = '/usr/src/app/apify_storage/datasets/default/linkedin_jobs.csv'
+            # Create the directory structure if it doesn't exist
+            csv_dir = '/usr/src/app/apify_storage/datasets/default'
+            os.makedirs(csv_dir, exist_ok=True)
             
-            # First try using the export_to_csv method
-            await default_dataset.export_to_csv(csv_output)
-            Actor.log.info(f"Exported dataset to CSV: {csv_output}")
-        except Exception as e:
-            Actor.log.warning(f"Could not export to CSV using dataset method: {e}")
-            # Fallback: Generate CSV manually
-            try:
-                import csv
-                # Get all possible field names from all items
-                fieldnames = set()
+            # Define CSV output path
+            csv_output = os.path.join(csv_dir, 'linkedin_jobs.csv')
+            
+            # Generate CSV manually from the items in memory
+            import csv
+            # Get all possible field names from all items
+            fieldnames = set()
+            for item in SCRAPED_ITEMS:
+                fieldnames.update(item.keys())
+            
+            # Remove HTML description to make CSV more readable
+            if 'job_description' in fieldnames:
+                fieldnames.remove('job_description')
+            
+            # Write to CSV
+            with open(csv_output, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=sorted(fieldnames))
+                writer.writeheader()
+                
                 for item in SCRAPED_ITEMS:
-                    fieldnames.update(item.keys())
-                
-                # Remove HTML description to make CSV more readable
-                if 'job_description' in fieldnames:
-                    fieldnames.remove('job_description')
-                
-                # Write to CSV
-                csv_output = '/usr/src/app/apify_storage/datasets/default/linkedin_jobs.csv'
-                with open(csv_output, 'w', newline='', encoding='utf-8') as f:
-                    writer = csv.DictWriter(f, fieldnames=sorted(fieldnames))
-                    writer.writeheader()
-                    
-                    for item in SCRAPED_ITEMS:
-                        # Create a copy without HTML description for CSV
-                        csv_item = {k: v for k, v in item.items() if k != 'job_description'}
-                        writer.writerow(csv_item)
-                Actor.log.info(f"Manually generated CSV at: {csv_output}")
-            except Exception as e2:
-                Actor.log.error(f"Could not manually generate CSV: {e2}")
+                    # Create a copy without HTML description for CSV
+                    csv_item = {k: v for k, v in item.items() if k != 'job_description'}
+                    writer.writerow(csv_item)
+            Actor.log.info(f"Generated CSV at: {csv_output}")
+        except Exception as e2:
+            Actor.log.error(f"Could not generate CSV: {e2}")
+            Actor.log.error(traceback.format_exc())
         
         # Store files in key-value store for easy download
         try:
@@ -379,7 +377,7 @@ async def process_apify_items() -> None:
             Actor.log.info("Saved JSON output to key-value store")
             
             # Store the CSV file if it exists
-            csv_output = '/usr/src/app/apify_storage/datasets/default/linkedin_jobs.csv'
+            csv_output = os.path.join(csv_dir, 'linkedin_jobs.csv')
             if os.path.exists(csv_output):
                 with open(csv_output, 'rb') as f:
                     await default_key_value_store.set_value(
