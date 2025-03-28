@@ -190,89 +190,91 @@
         ]
     },
     "views": {
-        "title": "LinkedIn Job Listings",
-        "description": "Data extracted from LinkedIn job postings",
-        "transformation": {
-            "fields": [
-                "id",
-                "companyName",
-                "title",
-                "postedAt",
-                "location",
-                "employment_type",
-                "seniority_level",
-                "easyApply",
-                "link",
-                "companyLinkedinUrl",
-                "skills",
-                "jobWorkplaceTypes",
-                "companyLogo",
-                "applyUrl",
-                "scraped_at"
-            ]
-        },
-        "display": {
-            "component": "table",
-            "properties": {
-                "id": {
-                    "label": "Job ID",
-                    "format": "text"
-                },
-                "companyName": {
-                    "label": "Company",
-                    "format": "text"
-                },
-                "title": {
-                    "label": "Job Title",
-                    "format": "text"
-                },
-                "postedAt": {
-                    "label": "Posted Date",
-                    "format": "date"
-                },
-                "location": {
-                    "label": "Location",
-                    "format": "text"
-                },
-                "employment_type": {
-                    "label": "Employment Type",
-                    "format": "text"
-                },
-                "seniority_level": {
-                    "label": "Seniority Level",
-                    "format": "text"
-                },
-                "easyApply": {
-                    "label": "Easy Apply",
-                    "format": "boolean"
-                },
-                "link": {
-                    "label": "Job URL",
-                    "format": "link"
-                },
-                "companyLinkedinUrl": {
-                    "label": "Company LinkedIn",
-                    "format": "link"
-                },
-                "skills": {
-                    "label": "Skills",
-                    "format": "array"
-                },
-                "jobWorkplaceTypes": {
-                    "label": "Workplace Types",
-                    "format": "array"
-                },
-                "companyLogo": {
-                    "label": "Company Logo",
-                    "format": "image"
-                },
-                "applyUrl": {
-                    "label": "Apply URL",
-                    "format": "link"
-                },
-                "scraped_at": {
-                    "label": "Scraped At",
-                    "format": "date"
+        "overview": {
+            "title": "LinkedIn Job Listings",
+            "description": "Data extracted from LinkedIn job postings",
+            "transformation": {
+                "fields": [
+                    "id",
+                    "companyName",
+                    "title",
+                    "postedAt",
+                    "location",
+                    "employment_type",
+                    "seniority_level",
+                    "easyApply",
+                    "link",
+                    "companyLinkedinUrl",
+                    "skills",
+                    "jobWorkplaceTypes",
+                    "companyLogo",
+                    "applyUrl",
+                    "scraped_at"
+                ]
+            },
+            "display": {
+                "component": "table",
+                "properties": {
+                    "id": {
+                        "label": "Job ID",
+                        "format": "text"
+                    },
+                    "companyName": {
+                        "label": "Company",
+                        "format": "text"
+                    },
+                    "title": {
+                        "label": "Job Title",
+                        "format": "text"
+                    },
+                    "postedAt": {
+                        "label": "Posted Date",
+                        "format": "date"
+                    },
+                    "location": {
+                        "label": "Location",
+                        "format": "text"
+                    },
+                    "employment_type": {
+                        "label": "Employment Type",
+                        "format": "text"
+                    },
+                    "seniority_level": {
+                        "label": "Seniority Level",
+                        "format": "text"
+                    },
+                    "easyApply": {
+                        "label": "Easy Apply",
+                        "format": "boolean"
+                    },
+                    "link": {
+                        "label": "Job URL",
+                        "format": "link"
+                    },
+                    "companyLinkedinUrl": {
+                        "label": "Company LinkedIn",
+                        "format": "link"
+                    },
+                    "skills": {
+                        "label": "Skills",
+                        "format": "array"
+                    },
+                    "jobWorkplaceTypes": {
+                        "label": "Workplace Types",
+                        "format": "array"
+                    },
+                    "companyLogo": {
+                        "label": "Company Logo",
+                        "format": "image"
+                    },
+                    "applyUrl": {
+                        "label": "Apply URL",
+                        "format": "link"
+                    },
+                    "scraped_at": {
+                        "label": "Scraped At",
+                        "format": "date"
+                    }
                 }
             }
         }
