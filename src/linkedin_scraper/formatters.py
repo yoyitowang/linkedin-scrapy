@@ -17,9 +17,10 @@ class LinkedInLogFormatter(LogFormatter):
         """
         if not spider.debug:
             # When debug is off, just log a simple message without the item details
+            # Updated to use the correct field names: 'title' and 'companyName'
             return {
                 'level': logging.INFO,
-                'msg': f"Scraped job: {item.get('job_title', '')} at {item.get('company_name', '')}"
+                'msg': f"Scraped job: {item.get('title', '')} at {item.get('companyName', '')}"
             }
         
         # In debug mode, use the default behavior
