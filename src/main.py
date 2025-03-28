@@ -70,8 +70,8 @@ def run_standalone_scraper(
     dataset_dir = os.path.join(apify_local_storage, 'datasets', dataset_id)
     json_output = os.path.join(dataset_dir, f'linkedin_jobs_output_{timestamp}.json')
     
-    # Also define a symlink to the latest output for convenience
-    latest_output = os.path.join(dataset_dir, 'linkedin_jobs_output_latest.json')
+    # Also define a standard output file for Apify compatibility
+    standard_output = os.path.join(dataset_dir, 'linkedin_jobs_output.json')
     
     # Ensure directory exists
     os.makedirs(dataset_dir, exist_ok=True)
@@ -79,6 +79,7 @@ def run_standalone_scraper(
     print(f"Using parameters: keyword={keyword}, location={location}, max_pages={max_pages}, max_jobs={max_jobs}")
     print(f"Debug mode: {debug}")
     print(f"Output will be written to: {json_output}")
+    print(f"Standard output will be: {standard_output}")
     
     # Configure logging based on debug flag
     log_level = logging.DEBUG if debug else logging.INFO
@@ -125,43 +126,20 @@ def run_standalone_scraper(
     process.start()
     print(f"Spider finished at {datetime.datetime.now().isoformat()}.")
     
-    # After crawling is done, create a symlink to the latest output
+    # Copy the output to the standard Apify output location for compatibility
     try:
-        # First check if the output file exists and has content
-        if not os.path.exists(json_output) or os.path.getsize(json_output) == 0:
-            print(f"Warning: Output file {json_output} does not exist or is empty.")
-            return json_output
-            
-        # If on Windows, we need to handle symlinks differently
-        if os.name == 'nt':  # Windows
-            # On Windows, just copy the file instead of creating a symlink
+        if os.path.exists(json_output) and os.path.getsize(json_output) > 0:
             import shutil
-            if os.path.exists(latest_output):
-                os.remove(latest_output)
-            shutil.copy2(json_output, latest_output)
-            print(f"Created copy of latest output at: {latest_output}")
-        else:  # Unix-like systems
-            # Remove existing symlink if it exists
-            if os.path.exists(latest_output) or os.path.islink(latest_output):
-                os.unlink(latest_output)  # Use unlink instead of remove for symlinks
-            # Create symlink - use relative path to make it more portable
-            os.symlink(os.path.basename(json_output), latest_output)
-            print(f"Created symlink to latest output at: {latest_output}")
-    except Exception as e:
-        print(f"Error creating latest output reference: {e}")
-    
-    # Also copy the output to the standard Apify output location for compatibility
-    try:
-        standard_output = os.path.join(dataset_dir, 'linkedin_jobs_output.json')
-        import shutil
-        if os.path.exists(standard_output):
-            os.remove(standard_output)
-        shutil.copy2(json_output, standard_output)
-        print(f"Copied output to standard location: {standard_output}")
+            if os.path.exists(standard_output):
+                os.remove(standard_output)
+            shutil.copy2(json_output, standard_output)
+            print(f"Copied output to standard location: {standard_output}")
+        else:
+            print(f"Warning: Output file {json_output} does not exist or is empty.")
     except Exception as e:
         print(f"Error copying to standard output location: {e}")
     
-    return json_output
+    return standard_output  # Return the standard output path for Apify compatibility
 
 
 def read_input_from_file() -> Dict[str, Any]:
@@ -257,9 +235,8 @@ async def run_apify_actor() -> None:
         if max_jobs > 0:
             Actor.log.info(f"Job limit set: Will scrape a maximum of {max_jobs} jobs")
         
-        # Configure output paths for local files
-        local_storage_dir = os.environ.get('APIFY_LOCAL_STORAGE_DIR', './apify_storage')
-        dataset_dir = os.path.join(local_storage_dir, 'datasets', 'default')
+        # Configure output paths for local files - use the standard Docker path
+        dataset_dir = '/usr/src/app/apify_storage/datasets/default'
         os.makedirs(dataset_dir, exist_ok=True)
         
         json_output = os.path.join(dataset_dir, 'linkedin_jobs_output.json')
@@ -295,6 +272,15 @@ async def run_apify_actor() -> None:
         # Add debug flag to settings
         settings.set('DEBUG_MODE', debug)
         
+        # Configure specific output file for Scrapy
+        settings.set('FEEDS', {
+            json_output: {
+                'format': 'json',
+                'encoding': 'utf8',
+                'indent': 4,
+            },
+        })
+        
         # Configure spider parameters
         spider_kwargs = {
             'keyword': keyword,
@@ -320,7 +306,7 @@ async def run_apify_actor() -> None:
         # Log completion
         Actor.log.info("LinkedIn job scraping completed")
         
-        # Process the output files
+        # Process the output file and push to Apify dataset
         await process_apify_output(json_output, csv_output)
 
 
@@ -331,137 +317,104 @@ async def process_apify_output(json_output: str, csv_output: str) -> None:
         json_output: Path to the JSON output file
         csv_output: Path to the CSV output file
     """
-    # Try to get the data from the JSON file first
-    jobs_data = []
-    file_found = False
-    
-    # List of possible file locations to check
-    possible_paths = [
-        json_output,
-        os.path.abspath(json_output),
-        '/tmp/linkedin_jobs_output.json',
-        '/usr/src/app/apify_storage/datasets/default/linkedin_jobs_output.json',
-        './apify_storage/datasets/default/linkedin_jobs_output.json'
-    ]
-    
-    # Try each possible path
-    for path in possible_paths:
+    # Load data from the specific output file - no need to check multiple paths
+    try:
+        if not os.path.exists(json_output):
+            Actor.log.error(f"Output file not found at expected location: {json_output}")
+            return
+            
+        if os.path.getsize(json_output) == 0:
+            Actor.log.warning(f"Output file exists but is empty: {json_output}")
+            return
+            
+        with open(json_output, 'r', encoding='utf-8') as f:
+            jobs_data = json.load(f)
+            
+        # Log the count
+        job_count = len(jobs_data)
+        Actor.log.info(f"Successfully loaded {job_count} LinkedIn jobs from {json_output}")
+        
+        # Get the default dataset
+        default_dataset = await Actor.open_dataset()
+        
+        # Push data to the dataset in batch mode
         try:
-            if os.path.exists(path):
-                Actor.log.info(f"Found output file at: {path}")
-                with open(path, 'r', encoding='utf-8') as f:
-                    jobs_data = json.load(f)
-                file_found = True
-                break
-        except Exception as e:
-            Actor.log.warning(f"Could not read from {path}: {e}")
-    
-    # If we have data from the file
-    if jobs_data:
-        try:
-            # Log the count
-            job_count = len(jobs_data)
-            Actor.log.info(f"Successfully scraped {job_count} LinkedIn jobs")
+            # Push all data at once for efficiency
+            await default_dataset.push_data(jobs_data)
+            Actor.log.info(f"Successfully pushed {job_count} jobs to Apify dataset in batch")
+        except Exception as batch_error:
+            Actor.log.warning(f"Batch push failed: {batch_error}. Trying individual pushes...")
             
-            # Get the default dataset
-            default_dataset = await Actor.open_dataset()
-            
-            # Push data to the dataset in batches to improve performance
-            try:
-                # Push all data at once - this is more efficient
-                await default_dataset.push_data(jobs_data)
-                Actor.log.info(f"Successfully pushed {job_count} jobs to Apify dataset in batch")
-            except Exception as batch_error:
-                Actor.log.warning(f"Batch push failed: {batch_error}. Trying individual pushes...")
-                # Fallback to individual pushes if batch fails
-                success_count = 0
-                for job in jobs_data:
-                    try:
-                        await default_dataset.push_data(job)
-                        success_count += 1
-                    except Exception as e:
-                        Actor.log.error(f"Failed to push job: {str(e)}")
-                
-                Actor.log.info(f"Pushed {success_count}/{job_count} jobs to Apify dataset individually")
-            
-            # Generate CSV from the dataset
-            try:
-                # First try using the export_to_csv method
-                await default_dataset.export_to_csv(csv_output)
-                Actor.log.info(f"Exported dataset to CSV: {csv_output}")
-            except Exception as e:
-                Actor.log.warning(f"Could not export to CSV using dataset method: {e}")
-                # Fallback: Generate CSV manually
+            # Fallback to individual pushes if batch fails
+            success_count = 0
+            for job in jobs_data:
                 try:
-                    import csv
-                    # Get all possible field names from all items
-                    fieldnames = set()
-                    for item in jobs_data:
-                        fieldnames.update(item.keys())
-                    
-                    # Remove HTML description to make CSV more readable
-                    if 'job_description' in fieldnames:
-                        fieldnames.remove('job_description')
-                    
-                    # Write to CSV
-                    with open(csv_output, 'w', newline='', encoding='utf-8') as f:
-                        writer = csv.DictWriter(f, fieldnames=sorted(fieldnames))
-                        writer.writeheader()
-                        
-                        for item in jobs_data:
-                            # Create a copy without HTML description for CSV
-                            csv_item = {k: v for k, v in item.items() if k != 'job_description'}
-                            writer.writerow(csv_item)
-                    Actor.log.info(f"Manually generated CSV at: {csv_output}")
-                except Exception as e2:
-                    Actor.log.error(f"Could not manually generate CSV: {e2}")
+                    await default_dataset.push_data(job)
+                    success_count += 1
+                except Exception as e:
+                    Actor.log.error(f"Failed to push job: {str(e)}")
             
-            # Store files in key-value store for easy download
-            try:
-                default_key_value_store = await Actor.open_key_value_store()
-                
-                # Store the JSON data - pass the Python object directly
-                await default_key_value_store.set_value(
-                    'linkedin_jobs.json', 
-                    jobs_data,  # Pass the Python object directly, SDK handles serialization
-                    content_type='application/json'
-                )
-                Actor.log.info("Saved JSON output to key-value store")
-                
-                # Store the CSV file if it exists
-                if os.path.exists(csv_output):
-                    with open(csv_output, 'rb') as f:
-                        await default_key_value_store.set_value(
-                            'linkedin_jobs.csv', 
-                            f.read(), 
-                            content_type='text/csv'
-                        )
-                    Actor.log.info("Saved CSV output to key-value store")
-            except Exception as e:
-                Actor.log.error(f"Error storing files in key-value store: {e}")
-            
-            # Print the paths to help users find the files
-            Actor.log.info(f"Local JSON file: {os.path.abspath(json_output)}")
-            Actor.log.info(f"Local CSV file: {os.path.abspath(csv_output)}")
-            
-        except Exception as e:
-            Actor.log.error(f"Error processing output files: {e}")
-            Actor.log.error(traceback.format_exc())
-    else:
-        # If no data was found in files, check if we have data in the dataset directly
+            Actor.log.info(f"Pushed {success_count}/{job_count} jobs to Apify dataset individually")
+        
+        # Generate CSV from the dataset
         try:
-            # Skip checking the dataset since we know the file is empty
-            Actor.log.warning("No jobs were found during scraping. The output file is empty.")
-            
-            # Optional: You can add a message explaining possible reasons
-            Actor.log.info("This could be due to:")
-            Actor.log.info("- No matching jobs found for the given criteria")
-            Actor.log.info("- LinkedIn might be blocking the scraping attempt")
-            Actor.log.info("- There might be an issue with the search parameters")
-            
+            # First try using the export_to_csv method
+            await default_dataset.export_to_csv(csv_output)
+            Actor.log.info(f"Exported dataset to CSV: {csv_output}")
         except Exception as e:
-            Actor.log.error(f"Error in final processing: {str(e)}")
-            Actor.log.error(traceback.format_exc())
+            Actor.log.warning(f"Could not export to CSV using dataset method: {e}")
+            # Fallback: Generate CSV manually
+            try:
+                import csv
+                # Get all possible field names from all items
+                fieldnames = set()
+                for item in jobs_data:
+                    fieldnames.update(item.keys())
+                
+                # Remove HTML description to make CSV more readable
+                if 'job_description' in fieldnames:
+                    fieldnames.remove('job_description')
+                
+                # Write to CSV
+                with open(csv_output, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=sorted(fieldnames))
+                    writer.writeheader()
+                    
+                    for item in jobs_data:
+                        # Create a copy without HTML description for CSV
+                        csv_item = {k: v for k, v in item.items() if k != 'job_description'}
+                        writer.writerow(csv_item)
+                Actor.log.info(f"Manually generated CSV at: {csv_output}")
+            except Exception as e2:
+                Actor.log.error(f"Could not manually generate CSV: {e2}")
+        
+        # Store files in key-value store for easy download
+        try:
+            default_key_value_store = await Actor.open_key_value_store()
+            
+            # Store the JSON data - pass the Python object directly
+            await default_key_value_store.set_value(
+                'linkedin_jobs.json', 
+                jobs_data,  # Pass the Python object directly, SDK handles serialization
+                content_type='application/json'
+            )
+            Actor.log.info("Saved JSON output to key-value store")
+            
+            # Store the CSV file if it exists
+            if os.path.exists(csv_output):
+                with open(csv_output, 'rb') as f:
+                    await default_key_value_store.set_value(
+                        'linkedin_jobs.csv', 
+                        f.read(), 
+                        content_type='text/csv'
+                    )
+                Actor.log.info("Saved CSV output to key-value store")
+        except Exception as e:
+            Actor.log.error(f"Error storing files in key-value store: {e}")
+        
+    except Exception as e:
+        Actor.log.error(f"Error processing output file: {e}")
+        Actor.log.error(traceback.format_exc())
 
 
 def main() -> None:
