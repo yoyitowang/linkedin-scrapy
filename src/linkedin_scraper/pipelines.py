@@ -45,7 +45,7 @@ class LinkedinJobPipeline:
             "companyName": "Test Company",
             "location": "Test Location",
             "link": "https://www.linkedin.com/jobs/view/test-job-id",
-            "scraped_at": datetime.now().isoformat(),
+            "scraped_at": datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
             "is_test_item": True
         }
         self.items.append(self.test_item)
@@ -105,12 +105,16 @@ class LinkedinJobPipeline:
                 except Exception as e:
                     spider.logger.warning(f"Could not extract job_id from URL: {adapter.get('link')} - {e}")
             
+            # Ensure datetime is in consistent format
+            if adapter.get('postedAt'):
+                adapter['postedAt'] = self._format_datetime(adapter['postedAt'])
+            
             # Ensure backward compatibility fields are populated
             self._ensure_backward_compatibility(adapter)
             
             # Add timestamp if not present
             if not adapter.get('scraped_at'):
-                adapter['scraped_at'] = datetime.now().isoformat()
+                adapter['scraped_at'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
             
             # Convert to dictionary for storing
             item_dict = dict(adapter)
@@ -130,6 +134,29 @@ class LinkedinJobPipeline:
             spider.logger.error(f"Error processing item: {e}")
             spider.logger.error(traceback.format_exc())
             return item
+    
+    def _format_datetime(self, date_value):
+        """Format date to ISO format (YYYY-MM-DDTHH:MM:SS)"""
+        if not date_value:
+            return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+            
+        try:
+            # If it's already in ISO format
+            if isinstance(date_value, str) and 'T' in date_value:
+                # Ensure it's properly formatted
+                dt = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
+                return dt.strftime('%Y-%m-%dT%H:%M:%S')
+            
+            # If it's a timestamp (integer)
+            if isinstance(date_value, (int, float)):
+                dt = datetime.fromtimestamp(date_value / 1000)  # Convert milliseconds to seconds
+                return dt.strftime('%Y-%m-%dT%H:%M:%S')
+                
+            # If it's a relative date string, use current date
+            return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        except Exception as e:
+            self.logger.warning(f"Error formatting date {date_value}: {e}")
+            return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     
     def _ensure_backward_compatibility(self, adapter):
         """Ensure backward compatibility with the old field names"""
@@ -233,7 +260,7 @@ class LinkedinJobPipeline:
                     "location": "Dummy Location",
                     "link": "https://www.linkedin.com/jobs/view/dummy-job-id",
                     "descriptionText": "<p>This is a dummy job created because no real jobs were scraped. This could be due to LinkedIn's anti-scraping measures or incorrect search parameters.</p>",
-                    "scraped_at": datetime.now().isoformat(),
+                    "scraped_at": datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
                     "is_dummy_item": True,
                     "note": "No real jobs were found during scraping. Check your search parameters and LinkedIn access."
                 }

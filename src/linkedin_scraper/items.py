@@ -14,8 +14,7 @@ class LinkedinJobItem(scrapy.Item):
     location = scrapy.Field()  # Job location (now structured)
     link = scrapy.Field()  # Job URL
     descriptionText = scrapy.Field()  # Job description text
-    postedAt = scrapy.Field()  # Posted date ISO format
-    postedAtTimestamp = scrapy.Field()  # Posted date timestamp
+    postedAt = scrapy.Field()  # Posted date in ISO format (e.g., 2025-03-28T10:13:08)
     
     # Enhanced job details
     isReposted = scrapy.Field()  # Whether the job is reposted

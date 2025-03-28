@@ -231,6 +231,29 @@ class LinkedinJobsSpider(scrapy.Spider):
         
         return html_text.strip()
     
+    def format_datetime(self, date_value):
+        """Format date to ISO format (YYYY-MM-DDTHH:MM:SS)"""
+        if not date_value:
+            return None
+            
+        try:
+            # If it's already in ISO format
+            if isinstance(date_value, str) and 'T' in date_value:
+                # Ensure it's properly formatted
+                dt = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
+                return dt.strftime('%Y-%m-%dT%H:%M:%S')
+            
+            # If it's a timestamp (integer)
+            if isinstance(date_value, (int, float)):
+                dt = datetime.fromtimestamp(date_value / 1000)  # Convert milliseconds to seconds
+                return dt.strftime('%Y-%m-%dT%H:%M:%S')
+                
+            # If it's a relative date string, use current date
+            return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        except Exception as e:
+            self.logger.warning(f"Error formatting date {date_value}: {e}")
+            return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    
     def parse_job_details(self, response):
         """Parse the job details page with enhanced data extraction"""
         # Check if we've reached the job limit
@@ -262,16 +285,12 @@ class LinkedinJobsSpider(scrapy.Spider):
         
         job_item["id"] = job_id
         
-        # Extract posted date and convert to timestamp
+        # Extract posted date and format consistently
         posted_date = response.meta.get("date_posted") or response.css("span.posted-time-ago__text::text").get()
         if posted_date:
-            job_item["postedAt"] = posted_date
-            # Try to convert to timestamp if it's in ISO format
-            try:
-                dt = datetime.fromisoformat(posted_date.replace('Z', '+00:00'))
-                job_item["postedAtTimestamp"] = int(dt.timestamp() * 1000)
-            except (ValueError, TypeError):
-                pass
+            job_item["postedAt"] = self.format_datetime(posted_date)
+        else:
+            job_item["postedAt"] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
         
         # Extract job description
         job_description = response.css("div.description__text").get()
@@ -349,8 +368,8 @@ class LinkedinJobsSpider(scrapy.Spider):
         job_item["job_description"] = job_item.get("descriptionText")
         job_item["date_posted"] = job_item.get("postedAt")
         
-        # Add timestamp
-        job_item["scraped_at"] = datetime.now().isoformat()
+        # Add timestamp in consistent format
+        job_item["scraped_at"] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
         
         # Extract additional data from JSON if available
         if json_data:
@@ -421,6 +440,10 @@ class LinkedinJobsSpider(scrapy.Spider):
             # Extract skills
             if 'skills' in job_data and not job_item.get('skills'):
                 job_item['skills'] = job_data['skills']
+            
+            # If we have a timestamp in the JSON data, format it consistently
+            if 'listedAt' in job_data:
+                job_item['postedAt'] = self.format_datetime(job_data['listedAt'])
             
         except Exception as e:
             self.logger.warning(f"Error extracting additional data from JSON: {e}")

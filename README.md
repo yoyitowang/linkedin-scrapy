@@ -20,6 +20,7 @@ This Apify actor scrapes job listings from LinkedIn based on keywords and locati
   - Required skills
 - Limit the number of pages or jobs to scrape
 - Backward compatibility with v1.0.0 data structure
+
 ## Input Parameters
 
 | Parameter | Type | Required | Default | Description |
@@ -64,8 +65,7 @@ The actor outputs a dataset with the following enhanced structure for each job l
     "4 connections work here"
   ],
   "descriptionText": "Overview\n\nIntuit's Consumer Group (CG), a team serving the needs of over 20+ million US consumers...",
-  "postedAtTimestamp": 1718984412000,
-  "postedAt": "2024-06-21T15:40:12.000Z",
+  "postedAt": "2024-06-21T15:40:12",
   "companyDescription": "Intuit is a global technology platform that helps our customers and communities...",
   "companyAddress": {
     "type": "PostalAddress",
@@ -139,9 +139,38 @@ The actor outputs a dataset with the following enhanced structure for each job l
   "location": "San Diego, CA",
   "job_url": "https://www.linkedin.com/jobs/view/3956051081",
   "job_description": "<div>Overview\n\nIntuit's Consumer Group (CG), a team serving the needs...</div>",
-  "date_posted": "2024-06-21T15:40:12.000Z",
+  "date_posted": "2024-06-21T15:40:12",
   "employment_type": "Full-time",
   "seniority_level": "Mid-Senior level",
-  "scraped_at": "2025-03-27T15:30:45.123Z"
+  "scraped_at": "2025-03-27T15:30:45"
 }
 ```
+
+## Usage
+
+1. Create a new task for the LinkedIn Job Scraper actor in Apify
+2. Set the required input parameters (`keyword` and `location` or `start_urls`)
+3. Optionally provide LinkedIn credentials for better results
+4. Run the actor and wait for the results
+
+## Data Availability
+
+Not all fields will be available for every job listing. The availability depends on:
+- Whether the job poster provided the information
+- Whether you're authenticated with LinkedIn
+- The type and age of the job listing
+
+## Limitations
+
+- LinkedIn may block excessive requests, so use reasonable rate limits
+- Some job details may not be accessible without authentication
+- The structure of LinkedIn pages may change, which could affect the scraper
+
+## Version History
+
+- **v2.0.0** - Enhanced data model with comprehensive job details
+- **v1.0.0** - Initial release with basic job information extraction
+
+## License
+
+This project is licensed under the Apache License 2.0.
