@@ -70,6 +70,7 @@ output/
 *.json
 !apify_storage/key_value_stores/default/INPUT.json
 !.actor/input_schema.json
+!storage_inputs/dataset-schema.json
 
 # Temporary files
 tmp/
