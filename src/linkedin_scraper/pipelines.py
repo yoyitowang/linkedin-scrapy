@@ -46,6 +46,7 @@ class LinkedinJobPipeline:
             "location": "Test Location",
             "link": "https://www.linkedin.com/jobs/view/test-job-id",
             "scraped_at": datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
+            "postedAt": None,
             "is_test_item": True
         }
         self.items.append(self.test_item)
@@ -76,7 +77,7 @@ class LinkedinJobPipeline:
         Process each scraped job item with enhanced data cleaning
         """
         try:
-            spider.logger.info(f"Pipeline received job item: {item.get('title', item.get('job_title', 'Unknown title'))}")
+            spider.logger.info(f"Pipeline received job item: {item.get('title', 'Unknown title')}")
             
             adapter = ItemAdapter(item)
             
@@ -91,10 +92,8 @@ class LinkedinJobPipeline:
                     adapter[field] = self._clean_text(adapter[field])
             
             # Clean HTML in job description
-            html_fields = ['descriptionText', 'job_description']
-            for field in html_fields:
-                if adapter.get(field):
-                    adapter[field] = self._clean_html(adapter[field])
+            if adapter.get('descriptionText'):
+                adapter['descriptionText'] = self._clean_html(adapter['descriptionText'])
             
             # Ensure job_id is present
             if not adapter.get('id') and adapter.get('link'):
@@ -109,12 +108,18 @@ class LinkedinJobPipeline:
             if adapter.get('postedAt'):
                 adapter['postedAt'] = self._format_datetime(adapter['postedAt'])
             
-            # Ensure backward compatibility fields are populated
-            self._ensure_backward_compatibility(adapter)
-            
-            # Add timestamp if not present
+            # Ensure scraped_at is present
             if not adapter.get('scraped_at'):
                 adapter['scraped_at'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+            
+            # Remove backward compatibility fields to avoid duplication
+            # We'll keep the new field names and remove the old ones
+            fields_to_remove = ['job_id', 'job_title', 'company_name', 'job_url', 
+                               'job_description', 'date_posted']
+            
+            for field in fields_to_remove:
+                if field in adapter:
+                    adapter.pop(field, None)
             
             # Convert to dictionary for storing
             item_dict = dict(adapter)
@@ -138,7 +143,7 @@ class LinkedinJobPipeline:
     def _format_datetime(self, date_value):
         """Format date to ISO format (YYYY-MM-DDTHH:MM:SS)"""
         if not date_value:
-            return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+            return None
             
         try:
             # If it's already in ISO format
@@ -156,29 +161,7 @@ class LinkedinJobPipeline:
             return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
         except Exception as e:
             self.logger.warning(f"Error formatting date {date_value}: {e}")
-            return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-    
-    def _ensure_backward_compatibility(self, adapter):
-        """Ensure backward compatibility with the old field names"""
-        # Map new field names to old field names
-        field_mapping = {
-            'id': 'job_id',
-            'title': 'job_title',
-            'companyName': 'company_name',
-            'link': 'job_url',
-            'descriptionText': 'job_description',
-            'postedAt': 'date_posted'
-        }
-        
-        # Copy values from new fields to old fields
-        for new_field, old_field in field_mapping.items():
-            if adapter.get(new_field) and not adapter.get(old_field):
-                adapter[old_field] = adapter[new_field]
-        
-        # Copy values from old fields to new fields
-        for new_field, old_field in field_mapping.items():
-            if adapter.get(old_field) and not adapter.get(new_field):
-                adapter[new_field] = adapter[old_field]
+            return None
     
     def _clean_text(self, text):
         """
@@ -261,6 +244,7 @@ class LinkedinJobPipeline:
                     "link": "https://www.linkedin.com/jobs/view/dummy-job-id",
                     "descriptionText": "<p>This is a dummy job created because no real jobs were scraped. This could be due to LinkedIn's anti-scraping measures or incorrect search parameters.</p>",
                     "scraped_at": datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
+                    "postedAt": None,
                     "is_dummy_item": True,
                     "note": "No real jobs were found during scraping. Check your search parameters and LinkedIn access."
                 }

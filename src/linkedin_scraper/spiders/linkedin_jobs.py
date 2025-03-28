@@ -2,7 +2,7 @@ import scrapy
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlencode
 from scrapy.exceptions import CloseSpider
 from ..items import LinkedinJobItem
@@ -154,6 +154,11 @@ class LinkedinJobsSpider(scrapy.Spider):
                 # Extract posted date if available
                 date_posted = job_card.css("time::attr(datetime)").get()
                 
+                # Extract the relative time text (e.g., "5 hours ago", "2 days ago")
+                relative_time = job_card.css("time::text").get()
+                if relative_time:
+                    relative_time = relative_time.strip()
+                
                 # Extract company logo if available
                 company_logo = job_card.css("img.artdeco-entity-image::attr(src)").get()
                 
@@ -176,6 +181,7 @@ class LinkedinJobsSpider(scrapy.Spider):
                         "company_name": company_name,
                         "location": location,
                         "date_posted": date_posted,
+                        "relative_time": relative_time,
                         "company_logo": company_logo,
                         "job_id": job_id
                     }
@@ -231,12 +237,58 @@ class LinkedinJobsSpider(scrapy.Spider):
         
         return html_text.strip()
     
+    def parse_relative_time(self, relative_time_text):
+        """
+        Parse relative time text (like "5 hours ago", "2 days ago") 
+        and return an estimated datetime
+        """
+        if not relative_time_text:
+            return None
+            
+        now = datetime.now()
+        relative_time_text = relative_time_text.lower().strip()
+        
+        # Match patterns like "5 hours ago", "2 days ago", "1 week ago", etc.
+        minutes_match = re.search(r'(\d+)\s+minute', relative_time_text)
+        hours_match = re.search(r'(\d+)\s+hour', relative_time_text)
+        days_match = re.search(r'(\d+)\s+day', relative_time_text)
+        weeks_match = re.search(r'(\d+)\s+week', relative_time_text)
+        months_match = re.search(r'(\d+)\s+month', relative_time_text)
+        
+        if minutes_match:
+            minutes = int(minutes_match.group(1))
+            return now - timedelta(minutes=minutes)
+        elif hours_match:
+            hours = int(hours_match.group(1))
+            return now - timedelta(hours=hours)
+        elif days_match:
+            days = int(days_match.group(1))
+            return now - timedelta(days=days)
+        elif weeks_match:
+            weeks = int(weeks_match.group(1))
+            return now - timedelta(weeks=weeks)
+        elif months_match:
+            months = int(months_match.group(1))
+            # Approximate a month as 30 days
+            return now - timedelta(days=30*months)
+        elif "just now" in relative_time_text or "just posted" in relative_time_text:
+            return now
+        elif "yesterday" in relative_time_text:
+            return now - timedelta(days=1)
+        
+        # If we can't parse the relative time, return None
+        return None
+    
     def format_datetime(self, date_value):
         """Format date to ISO format (YYYY-MM-DDTHH:MM:SS)"""
         if not date_value:
             return None
             
         try:
+            # If it's already a datetime object
+            if isinstance(date_value, datetime):
+                return date_value.strftime('%Y-%m-%dT%H:%M:%S')
+                
             # If it's already in ISO format
             if isinstance(date_value, str) and 'T' in date_value:
                 # Ensure it's properly formatted
@@ -252,7 +304,7 @@ class LinkedinJobsSpider(scrapy.Spider):
             return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
         except Exception as e:
             self.logger.warning(f"Error formatting date {date_value}: {e}")
-            return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+            return None
     
     def parse_job_details(self, response):
         """Parse the job details page with enhanced data extraction"""
@@ -266,6 +318,9 @@ class LinkedinJobsSpider(scrapy.Spider):
         
         # Create job item
         job_item = LinkedinJobItem()
+        
+        # Record the scrape time
+        job_item["scraped_at"] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
         
         # Try to extract structured data from the page
         json_data = self.extract_json_data(response)
@@ -284,13 +339,6 @@ class LinkedinJobsSpider(scrapy.Spider):
                 job_id = match.group(1)
         
         job_item["id"] = job_id
-        
-        # Extract posted date and format consistently
-        posted_date = response.meta.get("date_posted") or response.css("span.posted-time-ago__text::text").get()
-        if posted_date:
-            job_item["postedAt"] = self.format_datetime(posted_date)
-        else:
-            job_item["postedAt"] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
         
         # Extract job description
         job_description = response.css("div.description__text").get()
@@ -360,20 +408,37 @@ class LinkedinJobsSpider(scrapy.Spider):
         if skills:
             job_item["skills"] = skills[:10]  # Limit to top 10 skills
         
-        # Populate backward compatibility fields
-        job_item["job_id"] = job_id
-        job_item["job_title"] = job_item["title"]
-        job_item["company_name"] = job_item["companyName"]
-        job_item["job_url"] = job_item["link"]
-        job_item["job_description"] = job_item.get("descriptionText")
-        job_item["date_posted"] = job_item.get("postedAt")
-        
-        # Add timestamp in consistent format
-        job_item["scraped_at"] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-        
         # Extract additional data from JSON if available
         if json_data:
             self.extract_additional_data_from_json(job_item, json_data)
+        
+        # Handle the posted date - try to get the actual job posting time
+        # Try multiple sources to get the most accurate posting time
+        
+        # 1. Try to get the posting time from the specific CSS selector you provided
+        relative_time_text = response.css("div.job-details-jobs-unified-top-card__primary-description-container div span.tvm__text::text").get()
+        if not relative_time_text:
+            # Try alternative selectors
+            relative_time_text = response.css("span.posted-time-ago__text::text").get()
+            
+        if not relative_time_text and response.meta.get("relative_time"):
+            relative_time_text = response.meta.get("relative_time")
+            
+        if relative_time_text:
+            # Parse the relative time text to get an estimated datetime
+            posted_datetime = self.parse_relative_time(relative_time_text)
+            if posted_datetime:
+                job_item["postedAt"] = self.format_datetime(posted_datetime)
+        
+        # 2. If we couldn't get it from the UI, try the JSON data (already done in extract_additional_data_from_json)
+        
+        # 3. If we still don't have a posting time, try the meta data from the search results page
+        if not job_item.get("postedAt") and response.meta.get("date_posted"):
+            job_item["postedAt"] = self.format_datetime(response.meta.get("date_posted"))
+        
+        # If we still don't have a posting time, set to null
+        if not job_item.get("postedAt"):
+            job_item["postedAt"] = None
         
         # In non-debug mode, only log minimal information
         if not self.debug:
@@ -441,7 +506,7 @@ class LinkedinJobsSpider(scrapy.Spider):
             if 'skills' in job_data and not job_item.get('skills'):
                 job_item['skills'] = job_data['skills']
             
-            # If we have a timestamp in the JSON data, format it consistently
+            # If we have a timestamp in the JSON data, use it for postedAt
             if 'listedAt' in job_data:
                 job_item['postedAt'] = self.format_datetime(job_data['listedAt'])
             

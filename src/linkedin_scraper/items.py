@@ -7,13 +7,15 @@ class LinkedinJobItem(scrapy.Item):
     Supports comprehensive data extraction including company details,
     applicant insights, recruiter information, and more.
     """
-    # Core job information (original fields with some renamed for consistency)
+    # Core job information
     id = scrapy.Field()  # LinkedIn job ID
     title = scrapy.Field()  # Job title
     companyName = scrapy.Field()  # Company name
     location = scrapy.Field()  # Job location (now structured)
     link = scrapy.Field()  # Job URL
     descriptionText = scrapy.Field()  # Job description text
+    
+    # Job posting time (when the job was actually posted by the company)
     postedAt = scrapy.Field()  # Posted date in ISO format (e.g., 2025-03-28T10:13:08)
     
     # Enhanced job details
@@ -54,15 +56,9 @@ class LinkedinJobItem(scrapy.Item):
     # Skills required
     skills = scrapy.Field()  # Required skills for the job
     
-    # Metadata
-    scraped_at = scrapy.Field()  # When the job was scraped
+    # Job classification fields
+    employment_type = scrapy.Field()  # Type of employment (full-time, part-time, etc.)
+    seniority_level = scrapy.Field()  # Seniority level of the position
     
-    # Backward compatibility fields (will be populated from new fields)
-    job_id = scrapy.Field()
-    job_title = scrapy.Field()
-    company_name = scrapy.Field()
-    job_url = scrapy.Field()
-    job_description = scrapy.Field()
-    date_posted = scrapy.Field()
-    employment_type = scrapy.Field()
-    seniority_level = scrapy.Field()
+    # Metadata
+    scraped_at = scrapy.Field()  # When the job was scraped (timestamp of the scraping process)
