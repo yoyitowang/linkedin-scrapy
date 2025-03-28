@@ -1,60 +1,33 @@
-# Specify the base Docker image. You can read more about
-# the available images at https://crawlee.dev/docs/guides/docker-images
+# First, specify the base Docker image.
+# You can see the Docker images from Apify at https://hub.docker.com/r/apify/.
 # You can also use any other image from Docker Hub.
-FROM apify/actor-node-playwright-chrome:20 AS builder
+FROM apify/actor-python-playwright:3.13
 
-# Check preinstalled packages
-RUN npm ls crawlee apify puppeteer playwright
+# Second, copy just requirements.txt into the Actor image,
+# since it should be the only file that affects the dependency install in the next step,
+# in order to speed up the build
+COPY requirements.txt ./
 
-# Copy just package.json and package-lock.json
-# to speed up the build using Docker layer cache.
-COPY --chown=myuser package*.json ./
-
-# Install all dependencies. Don't audit to speed up the installation.
-RUN npm install --include=dev --audit=false
-
-# Next, copy the source files using the user set
-# in the base image.
-COPY --chown=myuser . ./
-
-# Install all dependencies and build the project.
-# Don't audit to speed up the installation.
-RUN npm run build
-
-# Create final image
-FROM apify/actor-node-playwright-chrome:20
-
-# Check preinstalled packages
-RUN npm ls crawlee apify puppeteer playwright
-
-# Copy just package.json and package-lock.json
-# to speed up the build using Docker layer cache.
-COPY --chown=myuser package*.json ./
-
-# Ensure we'll install Camoufox using the npm postinstall script
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
-# Install NPM packages, skip optional and development dependencies to
-# keep the image small. Avoid logging too much and print the dependency
-# tree for debugging
-RUN npm --quiet set progress=false \
-    && npm install --omit=dev \
-    && echo "Installed NPM packages:" \
-    && (npm list --omit=dev --all || true) \
-    && echo "Node.js version:" \
-    && node --version \
-    && echo "NPM version:" \
-    && npm --version \
-    && rm -r ~/.npm
-
-# Copy built JS files from builder image
-COPY --from=builder --chown=myuser /home/myuser/dist ./dist
+# Install the packages specified in requirements.txt,
+# Print the installed Python version, pip version
+# and all installed packages with their versions for debugging
+RUN echo "Python version:" \
+ && python --version \
+ && echo "Pip version:" \
+ && pip --version \
+ && echo "Installing dependencies:" \
+ && pip install -r requirements.txt \
+ && echo "All installed Python packages:" \
+ && pip freeze
 
 # Next, copy the remaining files and directories with the source code.
-# Since we do this after NPM install, quick build will be really fast
+# Since we do this after installing the dependencies, quick build will be really fast
 # for most source file changes.
-COPY --chown=myuser . ./
+COPY . ./
 
+# Use compileall to ensure the runnability of the Actor Python code.
+RUN python3 -m compileall -q src/
 
-# Run the image. If you know you won't need headful browsers,
-# you can remove the XVFB start script for a micro perf gain.
-CMD ./start_xvfb_and_run_cmd.sh && npm run start:prod --silent
+# Specify how to launch the source code of your Actor.
+# By default, the "python3 -m src" command is run
+CMD ["python3", "-m", "src"]

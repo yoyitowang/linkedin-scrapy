@@ -1,70 +1,65 @@
-## PlaywrightCrawler template
+# LinkedIn Job Scraper
 
-This template is a production-ready boilerplate for developing an [Actor](https://apify.com/actors) with `PlaywrightCrawler`. It has [Camoufox](https://github.com/daijro/camoufox) - a stealthy fork of Firefox - preinstalled. Note that Camoufox might consume more resources than the default Playwright-bundled Chromium or Firefox.
+This Apify actor scrapes job listings from LinkedIn based on keywords and location. It supports authentication for accessing detailed job information.
 
-Use this template to bootstrap your projects using the most up-to-date code.
+## Features
 
-> We decided to split Apify SDK into two libraries, Crawlee and Apify SDK v3. Crawlee will retain all the crawling and scraping-related tools and will always strive to be the best [web scraping](https://apify.com/web-scraping) library for its community. At the same time, Apify SDK will continue to exist, but keep only the Apify-specific features related to building actors on the Apify platform. Read the upgrading guide to learn about the changes.
->
+- Search for jobs by keyword and location
+- Authenticate with LinkedIn credentials for better results
+- Extract detailed job information including:
+  - Job title
+  - Company name
+  - Location
+  - Job description
+  - Employment type
+  - Seniority level
+  - Date posted
+- Limit the number of pages to scrape
+- Option to provide specific LinkedIn job URLs to scrape
 
-## Resources
+## Input Parameters
 
-If you're looking for examples or want to learn more visit:
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `keyword` | String | Yes | - | Job search keyword (e.g., "python developer") |
+| `location` | String | Yes | - | Job location (e.g., "San Francisco, CA") |
+| `linkedin_username` | String | No | - | LinkedIn username/email for authentication |
+| `linkedin_password` | String | No | - | LinkedIn password for authentication |
+| `max_pages` | Integer | No | 5 | Maximum number of search result pages to scrape |
+| `start_urls` | Array | No | [] | Specific LinkedIn job URLs to scrape directly |
 
-- [Crawlee + Apify Platform guide](https://crawlee.dev/docs/guides/apify-platform)
-- [Documentation](https://crawlee.dev/api/playwright-crawler/class/PlaywrightCrawler) and [examples](https://crawlee.dev/docs/examples/playwright-crawler)
-- [Node.js tutorials](https://docs.apify.com/academy/node-js) in Academy
-- [Scraping single-page applications with Playwright](https://blog.apify.com/scraping-single-page-applications-with-playwright/)
-- [How to scale Puppeteer and Playwright](https://blog.apify.com/how-to-scale-puppeteer-and-playwright/)
-- [Integration with Zapier](https://apify.com/integrations), Make, GitHub, Google Drive and other apps
-- [Video guide on getting scraped data using Apify API](https://www.youtube.com/watch?v=ViYYDHSBAKM)
-- A short guide on how to build web scrapers using code templates:
+## Output
 
-[web scraper template](https://www.youtube.com/watch?v=u-i-Korzf8w)
+The actor outputs a dataset with the following structure for each job listing:
 
+```json
+{
+  "job_id": "3123456789",
+  "job_title": "Senior Python Developer",
+  "company_name": "Example Company",
+  "location": "San Francisco, CA",
+  "job_url": "https://www.linkedin.com/jobs/view/senior-python-developer-at-example-company-3123456789",
+  "job_description": "<div>Full job description HTML...</div>",
+  "date_posted": "2025-03-25",
+  "employment_type": "Full-time",
+  "seniority_level": "Mid-Senior level",
+  "scraped_at": "2025-03-27T15:30:45.123Z"
+}
+```
 
-## Getting started
+## Usage
 
-For complete information [see this article](https://docs.apify.com/platform/actors/development#build-actor-at-apify-console). In short, you will:
+1. Create a new task for the LinkedIn Job Scraper actor in Apify
+2. Set the required input parameters (`keyword` and `location`)
+3. Optionally provide LinkedIn credentials for better results
+4. Run the actor and wait for the results
 
-1. Build the Actor
-2. Run the Actor
+## Limitations
 
-## Pull the Actor for local development
+- LinkedIn may block excessive requests, so use reasonable rate limits
+- Some job details may not be accessible without authentication
+- The structure of LinkedIn pages may change, which could affect the scraper
 
-If you would like to develop locally, you can pull the existing Actor from Apify console using Apify CLI:
+## License
 
-1. Install `apify-cli`
-
-    **Using Homebrew**
-
-    ```bash
-    brew install apify-cli
-    ```
-
-    **Using NPM**
-
-    ```bash
-    npm -g install apify-cli
-    ```
-
-2. Pull the Actor by its unique `<ActorId>`, which is one of the following:
-    - unique name of the Actor to pull (e.g. "apify/hello-world")
-    - or ID of the Actor to pull (e.g. "E2jjCZBezvAZnX8Rb")
-
-    You can find both by clicking on the Actor title at the top of the page, which will open a modal containing both Actor unique name and Actor ID.
-
-    This command will copy the Actor into the current directory on your local machine.
-
-    ```bash
-    apify pull <ActorId>
-    ```
-
-## Documentation reference
-
-To learn more about Apify and Actors, take a look at the following resources:
-
-- [Apify SDK for JavaScript documentation](https://docs.apify.com/sdk/js)
-- [Apify SDK for Python documentation](https://docs.apify.com/sdk/python)
-- [Apify Platform documentation](https://docs.apify.com/platform)
-- [Join our developer community on Discord](https://discord.com/invite/jyEM2PRvMU)
+This project is licensed under the Apache License 2.0.
