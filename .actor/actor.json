@@ -1,0 +1,16 @@
+{
+    "actorSpecification": 1,
+    "name": "linkedin-job-scraper",
+    "title": "LinkedIn Job Scraper",
+    "description": "Scrapes job listings from LinkedIn based on keywords and location. Supports authentication for accessing detailed job information.",
+    "version": "1.0.0",
+    "buildTag": "latest",
+    "meta": {
+        "templateId": "python-crawlee-playwright"
+    },
+    "input": "./input_schema.json",
+    "storages": {
+        "dataset": "./dataset_schema.json"
+    },
+    "dockerfile": "./Dockerfile"
+}

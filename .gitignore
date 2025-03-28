@@ -71,6 +71,7 @@ output/
 !apify_storage/key_value_stores/default/INPUT.json
 !.actor/input_schema.json
 !.actor/dataset-schema.json
+!.actor/actor.json
 
 # Temporary files
 tmp/
