@@ -256,10 +256,9 @@ async def run_apify_actor() -> None:
         settings.set('DEBUG_MODE', debug)
         
         # Add our custom pipeline to collect items in memory
-        # Make sure it's at the end of the pipeline to get the fully processed items
+        # Use a completely new pipeline configuration to avoid issues with existing pipelines
         settings.set('ITEM_PIPELINES', {
-            'src.linkedin_scraper.pipelines.LinkedInJobsPipeline': 300,
-            'src.main.MemoryStoragePipeline': 900,  # Higher number = later in the pipeline
+            'src.main.MemoryStoragePipeline': 300,
         })
         
         # Configure spider parameters
