@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import json
 import logging
+import traceback
 from apify import Actor
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
@@ -61,6 +62,14 @@ async def main() -> None:
         json_output = os.path.join(dataset_dir, 'linkedin_jobs_output.json')
         csv_output = os.path.join(dataset_dir, 'linkedin_jobs.csv')
         
+        # Ensure the output file exists with an empty array
+        try:
+            with open(json_output, 'w', encoding='utf-8') as f:
+                json.dump([], f)
+            Actor.log.info(f"Created empty output file: {json_output}")
+        except Exception as e:
+            Actor.log.warning(f"Could not create empty output file: {e}")
+        
         # Get Scrapy project settings
         settings = get_project_settings()
         
@@ -108,14 +117,33 @@ async def main() -> None:
         # Log completion
         Actor.log.info("LinkedIn job scraping completed")
         
-        # After the crawler is done, push all collected job data to Apify dataset
-        if os.path.exists(json_output):
+        # Try to get the data from the JSON file first
+        jobs_data = []
+        file_found = False
+        
+        # List of possible file locations to check
+        possible_paths = [
+            json_output,
+            os.path.abspath(json_output),
+            '/tmp/linkedin_jobs_output.json'
+        ]
+        
+        # Try each possible path
+        for path in possible_paths:
             try:
-                # Read the collected data from the JSON file
-                with open(json_output, 'r', encoding='utf-8') as f:
-                    jobs_data = json.load(f)
-                
-                # Log the count but don't push this to the dataset
+                if os.path.exists(path):
+                    Actor.log.info(f"Found output file at: {path}")
+                    with open(path, 'r', encoding='utf-8') as f:
+                        jobs_data = json.load(f)
+                    file_found = True
+                    break
+            except Exception as e:
+                Actor.log.warning(f"Could not read from {path}: {e}")
+        
+        # If we have data (either from file or already in dataset)
+        if jobs_data:
+            try:
+                # Log the count
                 job_count = len(jobs_data)
                 Actor.log.info(f"Successfully scraped {job_count} LinkedIn jobs")
                 
@@ -126,30 +154,61 @@ async def main() -> None:
                 await default_dataset.push_data(jobs_data)
                 Actor.log.info(f"Pushed {job_count} jobs to Apify dataset")
                 
-                # Write the dataset to CSV using Apify's SDK method
-                await default_dataset.export_to_csv(csv_output)
-                Actor.log.info(f"Exported dataset to CSV: {csv_output}")
+                # Generate CSV from the dataset
+                try:
+                    # First try using the export_to_csv method
+                    await default_dataset.export_to_csv(csv_output)
+                    Actor.log.info(f"Exported dataset to CSV: {csv_output}")
+                except Exception as e:
+                    Actor.log.warning(f"Could not export to CSV using dataset method: {e}")
+                    # Fallback: Generate CSV manually
+                    try:
+                        import csv
+                        # Get all possible field names from all items
+                        fieldnames = set()
+                        for item in jobs_data:
+                            fieldnames.update(item.keys())
+                        
+                        # Remove HTML description to make CSV more readable
+                        if 'job_description' in fieldnames:
+                            fieldnames.remove('job_description')
+                        
+                        # Write to CSV
+                        with open(csv_output, 'w', newline='', encoding='utf-8') as f:
+                            writer = csv.DictWriter(f, fieldnames=sorted(fieldnames))
+                            writer.writeheader()
+                            
+                            for item in jobs_data:
+                                # Create a copy without HTML description for CSV
+                                csv_item = {k: v for k, v in item.items() if k != 'job_description'}
+                                writer.writerow(csv_item)
+                        Actor.log.info(f"Manually generated CSV at: {csv_output}")
+                    except Exception as e2:
+                        Actor.log.error(f"Could not manually generate CSV: {e2}")
                 
                 # Store files in key-value store for easy download
-                default_key_value_store = await Actor.open_key_value_store()
-                
-                # Store the JSON file
-                with open(json_output, 'rb') as f:
+                try:
+                    default_key_value_store = await Actor.open_key_value_store()
+                    
+                    # Store the JSON data
                     await default_key_value_store.set_value(
                         'linkedin_jobs.json', 
-                        f.read(), 
+                        json.dumps(jobs_data, ensure_ascii=False, indent=2), 
                         content_type='application/json'
                     )
-                Actor.log.info("Saved JSON output to key-value store")
-                
-                # Store the CSV file
-                with open(csv_output, 'rb') as f:
-                    await default_key_value_store.set_value(
-                        'linkedin_jobs.csv', 
-                        f.read(), 
-                        content_type='text/csv'
-                    )
-                Actor.log.info("Saved CSV output to key-value store")
+                    Actor.log.info("Saved JSON output to key-value store")
+                    
+                    # Store the CSV file if it exists
+                    if os.path.exists(csv_output):
+                        with open(csv_output, 'rb') as f:
+                            await default_key_value_store.set_value(
+                                'linkedin_jobs.csv', 
+                                f.read(), 
+                                content_type='text/csv'
+                            )
+                        Actor.log.info("Saved CSV output to key-value store")
+                except Exception as e:
+                    Actor.log.error(f"Error storing files in key-value store: {e}")
                 
                 # Print the paths to help users find the files
                 Actor.log.info(f"Local JSON file: {os.path.abspath(json_output)}")
@@ -157,7 +216,19 @@ async def main() -> None:
                 
             except Exception as e:
                 Actor.log.error(f"Error processing output files: {e}")
-                import traceback
                 Actor.log.error(traceback.format_exc())
         else:
-            Actor.log.warning("No output files were created. The scraper may have failed to find any jobs.")
+            # If no data was found in files, check if we have data in the dataset directly
+            try:
+                # Skip checking the dataset since we know the file is empty
+                Actor.log.warning("No jobs were found during scraping. The output file is empty.")
+                
+                # Optional: You can add a message explaining possible reasons
+                Actor.log.info("This could be due to:")
+                Actor.log.info("- No matching jobs found for the given criteria")
+                Actor.log.info("- LinkedIn might be blocking the scraping attempt")
+                Actor.log.info("- There might be an issue with the search parameters")
+                
+            except Exception as e:
+                Actor.log.error(f"Error in final processing: {str(e)}")
+                Actor.log.error(traceback.format_exc())
