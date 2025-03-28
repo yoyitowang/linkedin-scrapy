@@ -92,7 +92,7 @@ def run_standalone_scraper(
     settings.set('LOG_LEVEL', 'DEBUG' if debug else 'INFO')
     settings.set('LOG_ENABLED', True)
     
-    # Configure output with timestamp
+    # Configure output with timestamp - ensure proper JSON array format
     settings.set('FEEDS', {
         json_output: {
             'format': 'json',
@@ -272,7 +272,7 @@ async def run_apify_actor() -> None:
         # Add debug flag to settings
         settings.set('DEBUG_MODE', debug)
         
-        # Configure specific output file for Scrapy
+        # Configure specific output file for Scrapy - ensure proper JSON array format
         settings.set('FEEDS', {
             json_output: {
                 'format': 'json',
@@ -326,9 +326,115 @@ async def process_apify_output(json_output: str, csv_output: str) -> None:
         if os.path.getsize(json_output) == 0:
             Actor.log.warning(f"Output file exists but is empty: {json_output}")
             return
-            
+        
+        # Read the file content first to inspect and fix if needed
         with open(json_output, 'r', encoding='utf-8') as f:
-            jobs_data = json.load(f)
+            file_content = f.read()
+        
+        # Debug the content
+        Actor.log.info(f"File size: {len(file_content)} bytes")
+        Actor.log.info(f"First 100 characters: {file_content[:100].replace(chr(10), ' ').replace(chr(13), ' ')}")
+        
+        # Try to fix common JSON issues
+        try:
+            jobs_data = json.loads(file_content)
+        except json.JSONDecodeError as e:
+            Actor.log.warning(f"JSON decode error: {e}. Attempting to fix...")
+            
+            # Try to fix common issues with JSON format
+            if file_content.startswith('[{') and file_content.endswith('}]'):
+                # Looks like valid JSON array, but might have internal issues
+                # Let's try a line-by-line approach
+                fixed_content = []
+                try:
+                    # Split by lines and parse each job entry
+                    lines = file_content.strip().split('\n')
+                    current_job = ""
+                    in_job = False
+                    
+                    for line in lines:
+                        line = line.strip()
+                        if line.startswith('{'):
+                            in_job = True
+                            current_job = line
+                        elif line.endswith('},') and in_job:
+                            current_job += line[:-1]  # remove trailing comma
+                            try:
+                                job_obj = json.loads(current_job)
+                                fixed_content.append(job_obj)
+                                current_job = ""
+                                in_job = False
+                            except:
+                                current_job += line
+                        elif line.endswith('}') and in_job and not line.endswith('},'):
+                            current_job += line
+                            try:
+                                job_obj = json.loads(current_job)
+                                fixed_content.append(job_obj)
+                                current_job = ""
+                                in_job = False
+                            except:
+                                current_job += line
+                        elif in_job:
+                            current_job += line
+                    
+                    Actor.log.info(f"Fixed JSON parsing: Found {len(fixed_content)} job entries")
+                    jobs_data = fixed_content
+                except Exception as parse_error:
+                    Actor.log.error(f"Failed to fix JSON: {parse_error}")
+                    
+                    # Last resort: Try to extract individual job objects
+                    try:
+                        # Find all objects between { and }
+                        import re
+                        pattern = r'\{[^{}]*\}'
+                        matches = re.findall(pattern, file_content)
+                        
+                        fixed_content = []
+                        for match in matches:
+                            try:
+                                job_obj = json.loads(match)
+                                fixed_content.append(job_obj)
+                            except:
+                                pass
+                        
+                        Actor.log.info(f"Regex extraction found {len(fixed_content)} job entries")
+                        jobs_data = fixed_content
+                    except Exception as regex_error:
+                        Actor.log.error(f"Failed regex extraction: {regex_error}")
+                        return
+            else:
+                # Not a JSON array format, try to read as individual JSON objects
+                try:
+                    # Try to parse as JSONL (one JSON object per line)
+                    jobs_data = []
+                    for line in file_content.strip().split('\n'):
+                        if line.strip():
+                            try:
+                                job_obj = json.loads(line.strip())
+                                jobs_data.append(job_obj)
+                            except:
+                                pass
+                    
+                    Actor.log.info(f"Parsed as JSONL: Found {len(jobs_data)} job entries")
+                except Exception as jsonl_error:
+                    Actor.log.error(f"Failed JSONL parsing: {jsonl_error}")
+                    return
+        
+        # If we got here and jobs_data is empty or not a list, we failed to parse
+        if not jobs_data or not isinstance(jobs_data, list):
+            Actor.log.error("Failed to parse JSON data into a list of job entries")
+            
+            # Create a backup of the problematic file for debugging
+            backup_file = json_output + '.bak'
+            try:
+                import shutil
+                shutil.copy2(json_output, backup_file)
+                Actor.log.info(f"Created backup of problematic JSON at: {backup_file}")
+            except Exception as backup_error:
+                Actor.log.error(f"Failed to create backup: {backup_error}")
+            
+            return
             
         # Log the count
         job_count = len(jobs_data)
