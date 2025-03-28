@@ -3,6 +3,7 @@ Pipeline for processing LinkedIn job items
 """
 import os
 import json
+import logging
 from datetime import datetime
 from itemadapter import ItemAdapter
 
@@ -14,11 +15,15 @@ class LinkedinJobPipeline:
     def __init__(self):
         """Initialize the pipeline with a list to collect all items"""
         self.items = []
-        # Create a dataset directory for backup storage
-        self.dataset_dir = os.path.join(os.environ.get('APIFY_LOCAL_STORAGE_DIR', ''), 'datasets', 'default')
+        # Create a dataset directory for local storage
+        self.local_storage_dir = os.environ.get('APIFY_LOCAL_STORAGE_DIR', './apify_storage')
+        self.dataset_dir = os.path.join(self.local_storage_dir, 'datasets', 'default')
         os.makedirs(self.dataset_dir, exist_ok=True)
         self.json_output = os.path.join(self.dataset_dir, 'linkedin_jobs_output.json')
-        self.csv_output = os.path.join(self.dataset_dir, 'linkedin_jobs_output.csv')
+        
+        # Set up logging
+        self.logger = logging.getLogger(__name__)
+        self.logger.info(f"Pipeline initialized. Output will be saved to: {self.json_output}")
     
     def process_item(self, item, spider):
         """
@@ -39,8 +44,8 @@ class LinkedinJobPipeline:
         if not adapter.get('job_id') and adapter.get('job_url'):
             try:
                 adapter['job_id'] = adapter['job_url'].split('?')[0].split('-')[-1]
-            except:
-                spider.logger.warning(f"Could not extract job_id from URL: {adapter.get('job_url')}")
+            except Exception as e:
+                spider.logger.warning(f"Could not extract job_id from URL: {adapter.get('job_url')} - {e}")
         
         # Add timestamp if not present
         if not adapter.get('scraped_at'):
@@ -52,12 +57,12 @@ class LinkedinJobPipeline:
         # Store the item in our collection
         self.items.append(item_dict)
         
-        # Write to local JSON file as a backup
+        # Write to local JSON file after each item (for safety)
         self._write_json_backup()
         
         # Log minimal info
         if spider.debug:
-            spider.logger.info(f"Processed job: {item_dict.get('job_title')}")
+            spider.logger.info(f"Processed job: {item_dict.get('job_title')} - Total: {len(self.items)}")
         
         return item
     
@@ -83,37 +88,15 @@ class LinkedinJobPipeline:
             with open(self.json_output, 'w', encoding='utf-8') as f:
                 json.dump(self.items, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"Error writing JSON backup: {e}")
-    
-    def _write_csv_backup(self):
-        """Write all collected items to a CSV file as backup"""
-        try:
-            import csv
-            
-            # Skip if no items
-            if not self.items:
-                return
-            
-            # Get all possible field names from all items
-            fieldnames = set()
-            for item in self.items:
-                fieldnames.update(item.keys())
-            
-            # Remove HTML description to make CSV more readable
-            if 'job_description' in fieldnames:
-                fieldnames.remove('job_description')
-            
-            # Write to CSV
-            with open(self.csv_output, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=sorted(fieldnames))
-                writer.writeheader()
-                
-                for item in self.items:
-                    # Create a copy without HTML description for CSV
-                    csv_item = {k: v for k, v in item.items() if k != 'job_description'}
-                    writer.writerow(csv_item)
-        except Exception as e:
-            print(f"Error writing CSV backup: {e}")
+            self.logger.error(f"Error writing JSON backup: {e}")
+            # Try with absolute path
+            try:
+                abs_path = os.path.abspath(self.json_output)
+                with open(abs_path, 'w', encoding='utf-8') as f:
+                    json.dump(self.items, f, ensure_ascii=False, indent=2)
+                self.logger.info(f"Successfully wrote to absolute path: {abs_path}")
+            except Exception as e2:
+                self.logger.error(f"Error writing to absolute path: {e2}")
     
     def close_spider(self, spider):
         """
@@ -121,11 +104,19 @@ class LinkedinJobPipeline:
         Finalize data collection
         """
         try:
-            # Write CSV backup
-            self._write_csv_backup()
+            # Write final JSON backup
+            self._write_json_backup()
             
             # Log completion
             spider.logger.info(f"LinkedIn job scraping completed. Total jobs scraped: {len(self.items)}")
+            spider.logger.info(f"Data saved to: {os.path.abspath(self.json_output)}")
+            
+            # Print directory contents for debugging
+            try:
+                if spider.debug:
+                    spider.logger.info(f"Contents of dataset directory: {os.listdir(self.dataset_dir)}")
+            except Exception as e:
+                spider.logger.error(f"Error listing directory contents: {e}")
                 
         except Exception as e:
             spider.logger.error(f"Error in close_spider: {e}")

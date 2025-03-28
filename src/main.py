@@ -53,12 +53,13 @@ async def main() -> None:
         if max_jobs > 0:
             Actor.log.info(f"Job limit set: Will scrape a maximum of {max_jobs} jobs")
         
-        # Configure output paths for Apify dataset
-        dataset_dir = os.path.join(os.environ.get('APIFY_LOCAL_STORAGE_DIR', ''), 'datasets', 'default')
+        # Configure output paths for local files
+        local_storage_dir = os.environ.get('APIFY_LOCAL_STORAGE_DIR', './apify_storage')
+        dataset_dir = os.path.join(local_storage_dir, 'datasets', 'default')
         os.makedirs(dataset_dir, exist_ok=True)
         
         json_output = os.path.join(dataset_dir, 'linkedin_jobs_output.json')
-        csv_output = os.path.join(dataset_dir, 'linkedin_jobs_output.csv')
+        csv_output = os.path.join(dataset_dir, 'linkedin_jobs.csv')
         
         # Get Scrapy project settings
         settings = get_project_settings()
@@ -118,12 +119,18 @@ async def main() -> None:
                 job_count = len(jobs_data)
                 Actor.log.info(f"Successfully scraped {job_count} LinkedIn jobs")
                 
-                # Push only the job data to Apify dataset
-                for job in jobs_data:
-                    await Actor.push_data(job)
+                # Get the default dataset
+                default_dataset = await Actor.open_dataset()
                 
-                # Store CSV and JSON as named keys in the default key-value store
-                # This makes them available for download from the Apify UI
+                # Push all job data to the dataset at once
+                await default_dataset.push_data(jobs_data)
+                Actor.log.info(f"Pushed {job_count} jobs to Apify dataset")
+                
+                # Write the dataset to CSV using Apify's SDK method
+                await default_dataset.export_to_csv(csv_output)
+                Actor.log.info(f"Exported dataset to CSV: {csv_output}")
+                
+                # Store files in key-value store for easy download
                 default_key_value_store = await Actor.open_key_value_store()
                 
                 # Store the JSON file
@@ -133,19 +140,24 @@ async def main() -> None:
                         f.read(), 
                         content_type='application/json'
                     )
-                Actor.log.info("Saved JSON output for download")
+                Actor.log.info("Saved JSON output to key-value store")
                 
-                # Store the CSV file if it exists
-                if os.path.exists(csv_output):
-                    with open(csv_output, 'rb') as f:
-                        await default_key_value_store.set_value(
-                            'linkedin_jobs.csv', 
-                            f.read(), 
-                            content_type='text/csv'
-                        )
-                    Actor.log.info("Saved CSV output for download")
+                # Store the CSV file
+                with open(csv_output, 'rb') as f:
+                    await default_key_value_store.set_value(
+                        'linkedin_jobs.csv', 
+                        f.read(), 
+                        content_type='text/csv'
+                    )
+                Actor.log.info("Saved CSV output to key-value store")
+                
+                # Print the paths to help users find the files
+                Actor.log.info(f"Local JSON file: {os.path.abspath(json_output)}")
+                Actor.log.info(f"Local CSV file: {os.path.abspath(csv_output)}")
                 
             except Exception as e:
                 Actor.log.error(f"Error processing output files: {e}")
+                import traceback
+                Actor.log.error(traceback.format_exc())
         else:
             Actor.log.warning("No output files were created. The scraper may have failed to find any jobs.")
