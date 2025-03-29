@@ -15,19 +15,19 @@
         "keyword": {
             "title": "Job Keyword",
             "type": "string",
-            "description": "Job search keyword (e.g., 'python developer')",
+            "description": "Job search keyword (e.g., 'python developer'). Required when Search Mode is 'Search by Keyword & Location'.",
             "editor": "textfield"
         },
         "location": {
             "title": "Job Location",
             "type": "string",
-            "description": "Job location (e.g., 'San Francisco, CA')",
+            "description": "Job location (e.g., 'San Francisco, CA'). Required when Search Mode is 'Search by Keyword & Location'.",
             "editor": "textfield"
         },
         "company": {
             "title": "Company Name",
             "type": "string",
-            "description": "Search for jobs at a specific company (e.g., 'Microsoft')",
+            "description": "Search for jobs at a specific company (e.g., 'Microsoft'). Required when Search Mode is 'Search by Company'.",
             "editor": "textfield"
         },
         "max_pages": {
@@ -49,9 +49,9 @@
             "editor": "number"
         },
         "start_urls": {
-            "title": "Start URLs (Optional)",
+            "title": "Start URLs",
             "type": "array",
-            "description": "Optional: Specific LinkedIn job URLs to scrape directly",
+            "description": "Specific LinkedIn job URLs to scrape directly. Required when Search Mode is 'Specific Job URLs'.",
             "editor": "requestListSources"
         },
         "linkedin_session_id": {
@@ -74,35 +74,5 @@
             "editor": "checkbox"
         }
     },
-    "required": ["search_mode"],
-    "dependencies": {
-        "search_mode": {
-            "oneOf": [
-                {
-                    "properties": {
-                        "search_mode": {
-                            "enum": ["keyword_location"]
-                        }
-                    },
-                    "required": ["keyword", "location"]
-                },
-                {
-                    "properties": {
-                        "search_mode": {
-                            "enum": ["company"]
-                        }
-                    },
-                    "required": ["company"]
-                },
-                {
-                    "properties": {
-                        "search_mode": {
-                            "enum": ["specific_urls"]
-                        }
-                    },
-                    "required": ["start_urls"]
-                }
-            ]
-        }
-    }
+    "required": ["search_mode"]
 }
