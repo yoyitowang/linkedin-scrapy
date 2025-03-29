@@ -39,8 +39,10 @@ SCRAPED_ITEMS = []
 
 
 def run_standalone_scraper(
+    search_mode: str = "keyword_location",
     keyword: str = "software developer",
     location: str = "United States",
+    company: Optional[str] = None,
     max_pages: int = 1,
     max_jobs: int = 10,
     linkedin_session_id: Optional[str] = None,
@@ -63,7 +65,17 @@ def run_standalone_scraper(
     # Ensure directory exists
     os.makedirs(dataset_dir, exist_ok=True)
     
-    print(f"Using parameters: keyword={keyword}, location={location}, max_pages={max_pages}, max_jobs={max_jobs}")
+    # Log parameters based on search mode
+    if search_mode == "keyword_location":
+        print(f"Search mode: Keyword & Location")
+        print(f"Using parameters: keyword={keyword}, location={location}, max_pages={max_pages}, max_jobs={max_jobs}")
+    elif search_mode == "company":
+        print(f"Search mode: Company")
+        print(f"Using parameters: company={company}, max_pages={max_pages}, max_jobs={max_jobs}")
+    elif search_mode == "specific_urls":
+        print(f"Search mode: Specific URLs")
+        print(f"Using {len(start_urls) if start_urls else 0} specific job URLs")
+    
     if linkedin_session_id:
         print("LinkedIn session ID provided for authentication")
         if linkedin_jsessionid:
@@ -101,17 +113,22 @@ def run_standalone_scraper(
     # Create crawler process with our settings
     process = CrawlerProcess(settings)
     
-    # Configure spider parameters
+    # Configure spider parameters based on search mode
     spider_kwargs = {
-        'keyword': keyword,
-        'location': location,
-        'linkedin_session_id': linkedin_session_id,
-        'linkedin_jsessionid': linkedin_jsessionid,
         'max_pages': max_pages,
         'max_jobs': max_jobs,
+        'linkedin_session_id': linkedin_session_id,
+        'linkedin_jsessionid': linkedin_jsessionid,
         'debug': debug,
         'start_urls': start_urls,
     }
+    
+    # Add parameters based on search mode
+    if search_mode == "keyword_location":
+        spider_kwargs['keyword'] = keyword
+        spider_kwargs['location'] = location
+    elif search_mode == "company":
+        spider_kwargs['company'] = company
     
     # Start the crawler
     print(f"Starting LinkedIn Jobs Spider at {datetime.datetime.now().isoformat()}...")
@@ -126,8 +143,10 @@ def read_input_from_file() -> Dict[str, Any]:
     """Read input parameters from various possible input file locations."""
     # Default values
     input_data = {
+        "search_mode": "keyword_location",
         "keyword": "software developer",
         "location": "United States",
+        "company": None,
         "max_pages": 1,
         "max_jobs": 10,
         "linkedin_session_id": None,
@@ -173,7 +192,15 @@ def read_input_from_file() -> Dict[str, Any]:
                     if 'session_cookies' in file_data and file_data['session_cookies']:
                         print("Warning: 'session_cookies' is deprecated. Please use 'linkedin_session_id' and 'linkedin_jsessionid' instead.")
                     
-                    print(f"Read input from {input_file}: keyword={input_data['keyword']}, location={input_data['location']}")
+                    # Log based on search mode
+                    search_mode = input_data.get('search_mode', 'keyword_location')
+                    if search_mode == "keyword_location":
+                        print(f"Read input from {input_file}: keyword={input_data['keyword']}, location={input_data['location']}")
+                    elif search_mode == "company":
+                        print(f"Read input from {input_file}: company={input_data['company']}")
+                    elif search_mode == "specific_urls":
+                        start_urls = file_data.get('start_urls', [])
+                        print(f"Read input from {input_file}: {len(start_urls)} specific URLs")
                 break
         except Exception as e:
             print(f"Error reading input file {input_file}: {e}")
@@ -301,9 +328,13 @@ async def run_apify_actor() -> None:
         # Retrieve the Actor input
         actor_input = await Actor.get_input() or {}
         
-        # Extract parameters from input
+        # Extract search mode
+        search_mode = actor_input.get('search_mode', 'keyword_location')
+        
+        # Extract parameters based on search mode
         keyword = actor_input.get('keyword')
         location = actor_input.get('location')
+        company = actor_input.get('company')
         
         # Extract LinkedIn session cookies
         linkedin_session_id = actor_input.get('linkedin_session_id')
@@ -318,16 +349,26 @@ async def run_apify_actor() -> None:
         start_urls = [url.get('url') for url in actor_input.get('start_urls', [])]
         debug = actor_input.get('debug', False)
         
-        # Validate required parameters
-        if not keyword and not location and not start_urls:
-            Actor.log.error("Either 'keyword' and 'location' or 'start_urls' must be provided")
+        # Validate required parameters based on search mode
+        if search_mode == "keyword_location" and (not keyword or not location):
+            Actor.log.error("For 'keyword_location' search mode, both 'keyword' and 'location' must be provided")
+            await Actor.fail("Missing required parameters")
+            return
+        elif search_mode == "company" and not company:
+            Actor.log.error("For 'company' search mode, 'company' name must be provided")
+            await Actor.fail("Missing required parameters")
+            return
+        elif search_mode == "specific_urls" and not start_urls:
+            Actor.log.error("For 'specific_urls' search mode, 'start_urls' must be provided")
             await Actor.fail("Missing required parameters")
             return
         
-        # Log startup information
-        if keyword and location:
+        # Log startup information based on search mode
+        if search_mode == "keyword_location":
             Actor.log.info(f"Starting LinkedIn job search for '{keyword}' in '{location}'")
-        elif start_urls:
+        elif search_mode == "company":
+            Actor.log.info(f"Starting LinkedIn job search for company: '{company}'")
+        elif search_mode == "specific_urls":
             Actor.log.info(f"Starting LinkedIn job scraping for {len(start_urls)} specific URLs")
             
         Actor.log.info(f"Debug mode: {'enabled' if debug else 'disabled'}")
@@ -372,17 +413,22 @@ async def run_apify_actor() -> None:
             'src.main.MemoryStoragePipeline': 300,
         })
         
-        # Configure spider parameters
+        # Configure spider parameters based on search mode
         spider_kwargs = {
-            'keyword': keyword,
-            'location': location,
-            'linkedin_session_id': linkedin_session_id,
-            'linkedin_jsessionid': linkedin_jsessionid,
             'max_pages': max_pages,
             'max_jobs': max_jobs,
+            'linkedin_session_id': linkedin_session_id,
+            'linkedin_jsessionid': linkedin_jsessionid,
             'start_urls': start_urls,
             'debug': debug
         }
+        
+        # Add parameters based on search mode
+        if search_mode == "keyword_location":
+            spider_kwargs['keyword'] = keyword
+            spider_kwargs['location'] = location
+        elif search_mode == "company":
+            spider_kwargs['company'] = company
         
         # Create and run the crawler process
         process = CrawlerProcess(settings)
@@ -418,13 +464,16 @@ def main() -> None:
             
             # Run the standalone scraper
             run_standalone_scraper(
+                search_mode=input_data.get('search_mode', 'keyword_location'),
                 keyword=input_data.get('keyword'),
                 location=input_data.get('location'),
+                company=input_data.get('company'),
                 max_pages=int(input_data.get('max_pages', 1)),
                 max_jobs=int(input_data.get('max_jobs', 10)),
                 linkedin_session_id=input_data.get('linkedin_session_id'),
                 linkedin_jsessionid=input_data.get('linkedin_jsessionid'),
-                debug=bool(input_data.get('debug', False))
+                debug=bool(input_data.get('debug', False)),
+                start_urls=input_data.get('start_urls')
             )
         
         print("LinkedIn Job Scraper finished.")

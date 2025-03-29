@@ -1,82 +1,95 @@
-#!/usr/bin/env python
 """
-LinkedIn Job Scraper - Main script to run the scraper
+Command-line script to run the LinkedIn job scraper directly.
 """
+
+import argparse
 import os
 import sys
-import argparse
-from scrapy.crawler import CrawlerProcess
-from scrapy.utils.project import get_project_settings
-from linkedin_scraper.spiders.linkedin_jobs import LinkedinJobsSpider
+from typing import Dict, Any
+
+# Fix import paths
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+from src.main import run_standalone_scraper
 
 
-def parse_arguments():
-    """Parse command line arguments"""
+def parse_arguments() -> Dict[str, Any]:
+    """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='LinkedIn Job Scraper')
     
-    # Required arguments
-    parser.add_argument('--keyword', type=str, required=True,
-                        help='Job search keyword (e.g., "python developer")')
-    parser.add_argument('--location', type=str, required=True,
-                        help='Job location (e.g., "San Francisco, CA")')
+    # Add search mode argument
+    parser.add_argument('--search_mode', type=str, default='keyword_location',
+                      choices=['keyword_location', 'company', 'specific_urls'],
+                      help='Search mode: keyword_location, company, or specific_urls')
     
-    # Optional arguments
-    parser.add_argument('--linkedin-session-id', type=str,
-                        help='LinkedIn session ID cookie (li_at) for authentication')
-    parser.add_argument('--linkedin-jsessionid', type=str,
-                        help='LinkedIn JSESSIONID cookie for authentication')
-    parser.add_argument('--max-pages', type=int, default=5,
-                        help='Maximum number of search result pages to scrape (default: 5)')
-    parser.add_argument('--max-jobs', type=int, default=10,
-                        help='Maximum number of jobs to scrape (default: 10)')
-    parser.add_argument('--output', type=str, default='linkedin_jobs_output.json',
-                        help='Output file path (default: linkedin_jobs_output.json)')
+    # Add keyword and location arguments (for keyword_location mode)
+    parser.add_argument('--keyword', type=str, help='Job search keyword')
+    parser.add_argument('--location', type=str, help='Job search location')
+    
+    # Add company argument (for company mode)
+    parser.add_argument('--company', type=str, help='Company name to search for jobs')
+    
+    # Add URL argument (for specific_urls mode)
+    parser.add_argument('--urls', type=str, nargs='+', help='Specific LinkedIn job URLs to scrape')
+    
+    # Add common arguments
+    parser.add_argument('--max_pages', type=int, default=1,
+                      help='Maximum number of search result pages to scrape')
+    parser.add_argument('--max_jobs', type=int, default=10,
+                      help='Maximum number of job listings to scrape (0 for unlimited)')
+    parser.add_argument('--linkedin_session_id', type=str,
+                      help='LinkedIn session ID cookie (li_at) for authenticated access')
+    parser.add_argument('--linkedin_jsessionid', type=str,
+                      help='LinkedIn JSESSIONID cookie for authenticated access')
     parser.add_argument('--debug', action='store_true',
-                        help='Enable debug mode with verbose logging')
+                      help='Enable debug mode to print detailed output')
     
-    return parser.parse_args()
+    args = parser.parse_args()
+    
+    # Validate arguments based on search mode
+    if args.search_mode == 'keyword_location' and (not args.keyword or not args.location):
+        parser.error("For 'keyword_location' search mode, both --keyword and --location are required")
+    elif args.search_mode == 'company' and not args.company:
+        parser.error("For 'company' search mode, --company is required")
+    elif args.search_mode == 'specific_urls' and not args.urls:
+        parser.error("For 'specific_urls' search mode, --urls is required")
+    
+    # Convert arguments to dictionary
+    return {
+        'search_mode': args.search_mode,
+        'keyword': args.keyword,
+        'location': args.location,
+        'company': args.company,
+        'max_pages': args.max_pages,
+        'max_jobs': args.max_jobs,
+        'linkedin_session_id': args.linkedin_session_id,
+        'linkedin_jsessionid': args.linkedin_jsessionid,
+        'debug': args.debug,
+        'start_urls': args.urls
+    }
 
 
-def main():
-    """Main function to run the LinkedIn job scraper"""
+def main() -> None:
+    """Main entry point for the command-line script."""
     # Parse command line arguments
     args = parse_arguments()
     
-    # Get Scrapy project settings
-    settings = get_project_settings()
-    
-    # Update settings with command line arguments
-    settings.set('FEEDS', {
-        args.output: {
-            'format': 'json',
-            'encoding': 'utf8',
-            'indent': 4,
-        },
-    })
-    
-    # Configure debug mode
-    if args.debug:
-        settings.set('LOG_LEVEL', 'DEBUG')
-    else:
-        settings.set('LOG_LEVEL', 'INFO')
-    
-    # Create and configure the crawler process
-    process = CrawlerProcess(settings)
-    
-    # Configure spider parameters
-    spider_kwargs = {
-        'keyword': args.keyword,
-        'location': args.location,
-        'linkedin_session_id': args.linkedin_session_id,
-        'linkedin_jsessionid': args.linkedin_jsessionid,
-        'max_pages': args.max_pages,
-        'max_jobs': args.max_jobs,
-        'debug': args.debug,
-    }
-    
-    # Start the crawler
-    process.crawl(LinkedinJobsSpider, **spider_kwargs)
-    process.start()
+    # Run the scraper
+    run_standalone_scraper(
+        search_mode=args.get('search_mode'),
+        keyword=args.get('keyword'),
+        location=args.get('location'),
+        company=args.get('company'),
+        max_pages=args.get('max_pages'),
+        max_jobs=args.get('max_jobs'),
+        linkedin_session_id=args.get('linkedin_session_id'),
+        linkedin_jsessionid=args.get('linkedin_jsessionid'),
+        debug=args.get('debug'),
+        start_urls=args.get('start_urls')
+    )
 
 
 if __name__ == "__main__":

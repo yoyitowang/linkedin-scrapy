@@ -3,6 +3,15 @@
     "type": "object",
     "schemaVersion": 1,
     "properties": {
+        "search_mode": {
+            "title": "Search Mode",
+            "type": "string",
+            "description": "Choose how to search for jobs on LinkedIn",
+            "editor": "select",
+            "enum": ["keyword_location", "company", "specific_urls"],
+            "enumTitles": ["Search by Keyword & Location", "Search by Company", "Specific Job URLs"],
+            "default": "keyword_location"
+        },
         "keyword": {
             "title": "Job Keyword",
             "type": "string",
@@ -13,6 +22,12 @@
             "title": "Job Location",
             "type": "string",
             "description": "Job location (e.g., 'San Francisco, CA')",
+            "editor": "textfield"
+        },
+        "company": {
+            "title": "Company Name",
+            "type": "string",
+            "description": "Search for jobs at a specific company (e.g., 'Microsoft')",
             "editor": "textfield"
         },
         "max_pages": {
@@ -39,6 +54,18 @@
             "description": "Optional: Specific LinkedIn job URLs to scrape directly",
             "editor": "requestListSources"
         },
+        "linkedin_session_id": {
+            "title": "LinkedIn Session ID (Optional)",
+            "type": "string",
+            "description": "LinkedIn 'li_at' session cookie for authenticated access (recommended)",
+            "editor": "textfield"
+        },
+        "linkedin_jsessionid": {
+            "title": "LinkedIn JSESSIONID (Optional)",
+            "type": "string",
+            "description": "LinkedIn 'JSESSIONID' cookie for authenticated access",
+            "editor": "textfield"
+        },
         "debug": {
             "title": "Debug Mode",
             "type": "boolean",
@@ -47,5 +74,35 @@
             "editor": "checkbox"
         }
     },
-    "required": ["keyword", "location"]
+    "required": ["search_mode"],
+    "dependencies": {
+        "search_mode": {
+            "oneOf": [
+                {
+                    "properties": {
+                        "search_mode": {
+                            "enum": ["keyword_location"]
+                        }
+                    },
+                    "required": ["keyword", "location"]
+                },
+                {
+                    "properties": {
+                        "search_mode": {
+                            "enum": ["company"]
+                        }
+                    },
+                    "required": ["company"]
+                },
+                {
+                    "properties": {
+                        "search_mode": {
+                            "enum": ["specific_urls"]
+                        }
+                    },
+                    "required": ["start_urls"]
+                }
+            ]
+        }
+    }
 }
