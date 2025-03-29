@@ -22,6 +22,8 @@ class LinkedinJobPipeline:
         # Create a dataset directory for local storage - try multiple paths
         self.local_storage_dir = os.environ.get('APIFY_LOCAL_STORAGE_DIR', './apify_storage')
         self.dataset_dir = os.path.join(self.local_storage_dir, 'datasets', 'default')
+        
+        # Create dataset directory if it doesn't exist
         os.makedirs(self.dataset_dir, exist_ok=True)
         
         # Define multiple possible output paths
@@ -159,7 +161,9 @@ class LinkedinJobPipeline:
         for path in paths_to_try:
             try:
                 # Ensure the directory exists
-                os.makedirs(os.path.dirname(path), exist_ok=True)
+                directory = os.path.dirname(path)
+                if directory:
+                    os.makedirs(directory, exist_ok=True)
                 
                 # Write the file
                 with open(path, 'w', encoding='utf-8') as f:
@@ -189,6 +193,11 @@ class LinkedinJobPipeline:
         try:
             # Log item count
             spider.logger.info(f"Spider closing. Total items collected: {len(self.items)}")
+            
+            # Remove test item if we have real jobs
+            if len(self.items) > 1:
+                self.items = [item for item in self.items if not item.get('is_test_item', False)]
+                spider.logger.info(f"Removed test item. Final job count: {len(self.items)}")
             
             # If we only have the test item, add a dummy job to ensure we have real output
             if len(self.items) <= 1:

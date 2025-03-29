@@ -6,6 +6,7 @@ from scrapy import signals
 from scrapy.http import HtmlResponse
 import time
 import random
+import logging
 from .security import SecurityManager
 
 
@@ -23,7 +24,13 @@ class LinkedinScraperSpiderMiddleware:
 
     def process_spider_output(self, response, result, spider):
         for i in result:
-            yield i
+            # Check if the spider has reached its job limit before yielding
+            if hasattr(spider, 'reached_job_limit') and spider.reached_job_limit:
+                # Only yield items, not requests
+                if not hasattr(i, 'callback'):
+                    yield i
+            else:
+                yield i
 
     def process_spider_exception(self, response, exception, spider):
         pass
@@ -40,7 +47,8 @@ class LinkedinScraperDownloaderMiddleware:
     """Downloader middleware for LinkedIn Job Scraper with enhanced security"""
 
     def __init__(self):
-        self.security_manager = SecurityManager()
+        self.logger = logging.getLogger(__name__)
+        self.security_manager = None
         self.request_count = 0
 
     @classmethod
@@ -51,6 +59,17 @@ class LinkedinScraperDownloaderMiddleware:
 
     def process_request(self, request, spider):
         """Process each request before it's sent to LinkedIn"""
+        # Skip processing if the spider has reached its job limit
+        if hasattr(spider, 'reached_job_limit') and spider.reached_job_limit:
+            self.logger.info("Job limit reached, canceling request")
+            return HtmlResponse(
+                url=request.url,
+                status=200,
+                body=b'<html><body><h1>Job limit reached</h1></body></html>',
+                encoding='utf-8',
+                request=request
+            )
+            
         # Apply rate limiting
         self.security_manager.apply_rate_limiting()
         
@@ -78,6 +97,10 @@ class LinkedinScraperDownloaderMiddleware:
 
     def process_response(self, request, response, spider):
         """Process each response from LinkedIn"""
+        # Skip processing if the spider has reached its job limit
+        if hasattr(spider, 'reached_job_limit') and spider.reached_job_limit:
+            return response
+            
         # Check for security challenges
         security_action = self.security_manager.handle_security_challenge(
             response.url, response.status
@@ -103,8 +126,8 @@ class LinkedinScraperDownloaderMiddleware:
                 if retry_count <= 3:  # Maximum 3 retries
                     request.meta['retry_count'] = retry_count
                     spider.logger.info(f"Retrying request (attempt {retry_count}/3)")
-        return request
-
+                    return request
+        
         # Check for CAPTCHA
         if self.security_manager.is_captcha_page(response.text):
             spider.logger.error("CAPTCHA detected! Scraping may be blocked.")
@@ -114,6 +137,10 @@ class LinkedinScraperDownloaderMiddleware:
 
     def process_exception(self, request, exception, spider):
         """Handle exceptions during requests"""
+        # Skip processing if the spider has reached its job limit
+        if hasattr(spider, 'reached_job_limit') and spider.reached_job_limit:
+            return None
+            
         spider.logger.error(f"Request exception: {exception}")
         
         # Add delay before retry
