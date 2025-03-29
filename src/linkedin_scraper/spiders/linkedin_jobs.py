@@ -403,11 +403,15 @@ class LinkedinJobsSpider(scrapy.Spider):
                 )
    
     def parse_job_details(self, response):
-        """Parse the job details page"""
+        """Parse the job details page with support for both logged-in and non-logged-in views"""
         self.logger.info(f"Parsing job details from: {response.url}")
         
         # Increment job counter
         self.job_count += 1
+        
+        # Detect if we're logged in by looking for specific elements
+        is_logged_in = "nav__button-secondary" not in response.text
+        self.logger.debug(f"Detected authentication status: {'Logged in' if is_logged_in else 'Not logged in'}")
         
         # Extract job ID from URL if not already in meta
         job_id = response.meta.get('job_id')
@@ -416,55 +420,88 @@ class LinkedinJobsSpider(scrapy.Spider):
             if match:
                 job_id = match.group(1)
         
-        # Get job details from meta or extract from page
-        job_title = response.meta.get('job_title')
-        if not job_title:
-            job_title = response.css("h1.job-details-jobs-unified-top-card__job-title::text").get()
-            if job_title:
-                job_title = job_title.strip()
-        
-        company_name = response.meta.get('company_name')
-        if not company_name:
-            company_name = response.css("a.job-details-jobs-unified-top-card__company-name::text").get()
-            if company_name:
-                company_name = company_name.strip()
-        
-        location = response.meta.get('location')
-        if not location:
-            location = response.css("span.job-details-jobs-unified-top-card__bullet::text").get()
-            if location:
-                location = location.strip()
-        
-        # Extract job description
-        description_container = response.css("div.job-details-jobs-unified-description__container")
-        description_text = ""
-        if description_container:
-            # Extract all text from the description container
-            description_text = " ".join(description_container.css("::text").getall())
-            description_text = description_text.strip()
-        
-        # Extract other job details
+        # Initialize variables
+        job_title = None
+        company_name = None
+        location = None
+        description_text = None
         employment_type = None
         seniority_level = None
         
-        criteria_items = response.css("li.job-details-jobs-unified-top-card__job-insight")
-        for item in criteria_items:
-            text = " ".join(item.css("::text").getall()).strip()
-            if "Employment type" in text:
-                employment_type = text.replace("Employment type", "").strip()
-            elif "Seniority level" in text:
-                seniority_level = text.replace("Seniority level", "").strip()
+        # Try to get job details based on authentication status
+        if is_logged_in:
+            # Logged-in view selectors
+            job_title = response.css("h1.job-details-jobs-unified-top-card__job-title::text, h1.topcard__title::text").get()
+            company_name = response.css("a.job-details-jobs-unified-top-card__company-name::text, a.topcard__org-name-link::text").get()
+            location = response.css("span.job-details-jobs-unified-top-card__bullet::text, span.topcard__flavor--bullet::text").get()
+            
+            # Description for logged-in view
+            description_container = response.css("div.job-details-jobs-unified-description__container, div.description__text")
+            if description_container:
+                description_text = " ".join(description_container.css("::text").getall())
+            
+            # Job criteria for logged-in view
+            criteria_items = response.css("li.job-details-jobs-unified-top-card__job-insight, li.job-criteria__item")
+            for item in criteria_items:
+                text = " ".join(item.css("::text").getall()).strip()
+                if "Employment type" in text or "Employment Type" in text:
+                    employment_type = text.replace("Employment type", "").replace("Employment Type", "").strip()
+                elif "Seniority level" in text or "Seniority Level" in text:
+                    seniority_level = text.replace("Seniority level", "").replace("Seniority Level", "").strip()
+        else:
+            # Non-logged-in view selectors
+            job_title = response.css("h1.top-card-layout__title::text").get()
+            company_name = response.css("a.topcard__org-name-link::text").get()
+            location = response.css("span.topcard__flavor--bullet::text").get()
+            
+            # Description for non-logged-in view
+            description_container = response.css("div.description__text")
+            if description_container:
+                description_text = " ".join(description_container.css("::text").getall())
+            
+            # Job criteria for non-logged-in view
+            criteria_items = response.css("li.description__job-criteria-item")
+            for item in criteria_items:
+                item_title = item.css("h3.description__job-criteria-subheader::text").get()
+                item_value = item.css("span.description__job-criteria-text::text").get()
+                
+                if item_title and item_value:
+                    item_title = item_title.strip()
+                    item_value = item_value.strip()
+                    
+                    if "Employment type" in item_title or "Employment Type" in item_title:
+                        employment_type = item_value
+                    elif "Seniority level" in item_title or "Seniority Level" in item_title:
+                        seniority_level = item_value
         
-        # Create job item
+        # Fall back to meta data if we couldn't extract from the page
+        if not job_title:
+            job_title = response.meta.get('job_title')
+        if not company_name:
+            company_name = response.meta.get('company_name')
+        if not location:
+            location = response.meta.get('location')
+        
+        # Clean up extracted data
+        if job_title:
+            job_title = job_title.strip()
+        if company_name:
+            company_name = company_name.strip()
+        if location:
+            location = location.strip()
+        if description_text:
+            description_text = description_text.strip()
+        
+        # Create job item with proper data types
         job_item = LinkedinJobItem()
-        job_item['id'] = job_id
-        job_item['title'] = job_title
-        job_item['companyName'] = company_name
-        job_item['location'] = location
-        job_item['link'] = response.url
-        job_item['descriptionText'] = description_text
-        job_item['employment_type'] = employment_type
-        job_item['seniority_level'] = seniority_level
+        job_item['id'] = str(job_id) if job_id else f"job_{self.job_count}"
+        job_item['title'] = str(job_title) if job_title else "Unknown Title"
+        job_item['companyName'] = str(company_name) if company_name else "Unknown Company"
+        job_item['location'] = str(location) if location else "Unknown Location"
+        job_item['link'] = str(response.url)
+        job_item['descriptionText'] = str(description_text) if description_text else ""
+        job_item['employment_type'] = str(employment_type) if employment_type else None
+        job_item['seniority_level'] = str(seniority_level) if seniority_level else None
         job_item['postedAt'] = response.meta.get('date_posted')
         job_item['scraped_at'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
         
@@ -477,116 +514,6 @@ class LinkedinJobsSpider(scrapy.Spider):
             raise CloseSpider(f"Reached maximum job count: {self.max_jobs}")
         
         yield job_item
-        """Parse the job details page with enhanced data extraction"""
-        # Check if we've reached the job limit
-        if self.max_jobs > 0 and self.job_count >= self.max_jobs:
-            self.logger.info(f"✅ Reached the maximum job count limit ({self.max_jobs}). Skipping job.")
-            return
-            
-        # Increment job counter
-        self.job_count += 1
-        
-        # Create job item - We'll populate fields in the desired order
-        job_item = LinkedinJobItem()
-        
-        # Try to extract structured data from the page
-        json_data = self._extract_json_data(response)
-        
-        # Extract job ID using multiple methods
-        job_id = self._extract_job_id(response)
-        
-        # Extract basic job information
-        job_info = self._extract_basic_job_info(response)
-        
-        # Extract company information
-        company_info = self._extract_company_info(response)
-        
-        # Extract job details
-        job_details = self._extract_job_details(response)
-        
-        # Extract posting time information
-        posting_info = self._extract_posting_info(response)
-        
-        # Extract additional data from JSON if available
-        additional_data = self._extract_additional_data(json_data)
-        
-        # Record the scrape time
-        scraped_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-        
-        # Now populate the job item in the desired order
-        # 1. ID first
-        job_item["id"] = job_id
-        # 2. Company name second
-        job_item["companyName"] = job_info.get("company_name")
-        # 3. Job title third
-        job_item["title"] = job_info.get("job_title")
-        # 4. Posted time fourth
-        job_item["postedAt"] = posting_info.get("posted_at")
-        # 5. Location fifth
-        job_item["location"] = job_info.get("location")
-        # 6. Employment type
-        if job_details.get("employment_type"):
-            job_item["employment_type"] = job_details.get("employment_type")
-        # 7. Seniority level
-        if job_details.get("seniority_level"):
-            job_item["seniority_level"] = job_details.get("seniority_level")
-        # 8. Easy apply flag
-        job_item["easyApply"] = job_details.get("easy_apply", False)
-        # 9. Job link
-        job_item["link"] = response.url
-        # 10. Company LinkedIn URL
-        if company_info.get("company_linkedin_url"):
-            job_item["companyLinkedinUrl"] = company_info.get("company_linkedin_url")
-        # 11. Skills
-        if job_details.get("skills"):
-            job_item["skills"] = job_details.get("skills")
-        # 12. Description text
-        job_item["descriptionText"] = job_details.get("job_description_text", "")
-        # 13. Scraping timestamp
-        job_item["scraped_at"] = scraped_at
-        
-        # Add any workplace types
-        if job_details.get("workplace_types"):
-            job_item["jobWorkplaceTypes"] = job_details.get("workplace_types")
-        
-        # Add insights if available
-        if job_details.get("insights"):
-            job_item["insights"] = job_details.get("insights")
-        
-        # Add company logo if available
-        if company_info.get("company_logo"):
-            job_item["companyLogo"] = company_info.get("company_logo")
-        
-        # Add application URL if available
-        if job_details.get("apply_url"):
-            job_item["applyUrl"] = job_details.get("apply_url")
-        
-        # Add company description if available
-        if company_info.get("company_description"):
-            job_item["companyDescription"] = company_info.get("company_description")
-        
-        # Add any additional data extracted from JSON
-        for key, value in additional_data.items():
-            if key not in job_item:
-                job_item[key] = value
-        
-        # In non-debug mode, only log minimal information
-        if not self.debug:
-            self.logger.info(f"Scraped job {self.job_count}: {job_item['title']} at {job_item['companyName']} (ID: {job_item['id']})")
-        else:
-            # In debug mode, log detailed information
-            self.logger.debug(f"Scraped job {self.job_count} details: {job_item['title']} at {job_item['companyName']} (ID: {job_item['id']})")
-            self.logger.debug(f"Full job data: {json.dumps({k: v for k, v in dict(job_item).items() if k != 'descriptionText'}, ensure_ascii=False)}")
-            self.logger.debug(f"Job description length: {len(job_item.get('descriptionText', ''))}")
-        
-        # Check if we've reached the job limit after processing this job
-        if self.max_jobs > 0 and self.job_count >= self.max_jobs:
-            self.logger.info(f"✅ Reached the maximum job count limit ({self.max_jobs}). This is the final job.")
-        
-        yield job_item
-        
-        # Check job limit after yielding the item
-        self.check_job_limit()
     
     def _extract_job_id(self, response):
         """Extract job ID using multiple methods to ensure we get a value"""

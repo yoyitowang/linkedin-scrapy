@@ -188,12 +188,59 @@ async def process_apify_items():
         
     global SCRAPED_ITEMS
     
-    # Push all items to the default dataset
-    if SCRAPED_ITEMS:
-        Actor.log.info(f"Pushing {len(SCRAPED_ITEMS)} items to the default dataset")
-        await Actor.push_data(SCRAPED_ITEMS)
+    # Clean and validate items before pushing to dataset
+    cleaned_items = []
+    
+    for item in SCRAPED_ITEMS:
+        try:
+            # Ensure all values are of valid types for JSON serialization
+            cleaned_item = {}
+            
+            for key, value in item.items():
+                # Handle None values
+                if value is None:
+                    cleaned_item[key] = None
+                    continue
+                    
+                # Convert all string-like objects to strings
+                if hasattr(value, '__str__'):
+                    cleaned_item[key] = str(value)
+                # Convert datetime objects to ISO format strings
+                elif hasattr(value, 'isoformat'):
+                    cleaned_item[key] = value.isoformat()
+                # Handle lists and dictionaries recursively
+                elif isinstance(value, (list, dict)):
+                    # For simplicity, just convert to string
+                    # In a full solution, you'd want to recursively clean these
+                    cleaned_item[key] = json.dumps(value)
+                else:
+                    # For other types, convert to string as fallback
+                    cleaned_item[key] = str(value)
+            
+            # Ensure required fields exist
+            if 'id' not in cleaned_item or not cleaned_item['id']:
+                cleaned_item['id'] = f"job_{len(cleaned_items)}"
+                
+            if 'title' not in cleaned_item or not cleaned_item['title']:
+                cleaned_item['title'] = "Unknown Title"
+                
+            if 'companyName' not in cleaned_item or not cleaned_item['companyName']:
+                cleaned_item['companyName'] = "Unknown Company"
+            
+            # Add to cleaned items
+            cleaned_items.append(cleaned_item)
+            
+        except Exception as e:
+            Actor.log.error(f"Error cleaning item: {e}")
+            # Skip this item if it can't be cleaned
+            continue
+    
+    # Push all cleaned items to the default dataset
+    if cleaned_items:
+        Actor.log.info(f"Pushing {len(cleaned_items)} cleaned items to the default dataset")
+        await Actor.push_data(cleaned_items)
     else:
-        Actor.log.warning("No items were scraped")
+        Actor.log.warning("No valid items were found to push to the dataset")
 
 
 class MemoryStoragePipeline:
@@ -202,9 +249,41 @@ class MemoryStoragePipeline:
     def process_item(self, item, spider):
         """Store the item in memory."""
         global SCRAPED_ITEMS
-        # Convert item to dict and store in memory
-        item_dict = dict(item)
-        SCRAPED_ITEMS.append(item_dict)
+        
+        try:
+            # Convert item to dict
+            item_dict = dict(item)
+            
+            # Ensure all values are of valid types for JSON serialization
+            cleaned_item = {}
+            
+            for key, value in item_dict.items():
+                # Handle None values
+                if value is None:
+                    cleaned_item[key] = None
+                    continue
+                    
+                # Convert all string-like objects to strings
+                if hasattr(value, '__str__'):
+                    cleaned_item[key] = str(value)
+                # Convert datetime objects to ISO format strings
+                elif hasattr(value, 'isoformat'):
+                    cleaned_item[key] = value.isoformat()
+                else:
+                    # For other types, convert to string as fallback
+                    cleaned_item[key] = str(value)
+            
+            # Add to global items list
+            SCRAPED_ITEMS.append(cleaned_item)
+            
+            # Log the count
+            if hasattr(spider, 'logger'):
+                spider.logger.info(f"Added job to memory storage. Total: {len(SCRAPED_ITEMS)}")
+                
+        except Exception as e:
+            if hasattr(spider, 'logger'):
+                spider.logger.error(f"Error storing item in memory: {e}")
+        
         return item
 
 
