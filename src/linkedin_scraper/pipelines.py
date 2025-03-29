@@ -5,9 +5,9 @@ import os
 import json
 import logging
 import traceback
-import re
 from datetime import datetime
 from itemadapter import ItemAdapter
+from src.utils import clean_html, clean_text, format_datetime
 
 class LinkedinJobPipeline:
     """
@@ -89,15 +89,16 @@ class LinkedinJobPipeline:
             
             for field in text_fields:
                 if adapter.get(field):
-                    adapter[field] = self._clean_text(adapter[field])
+                    adapter[field] = clean_text(adapter[field])
             
             # Clean HTML in job description
             if adapter.get('descriptionText'):
-                adapter['descriptionText'] = self._clean_html(adapter['descriptionText'])
+                adapter['descriptionText'] = clean_html(adapter['descriptionText'])
             
             # Ensure job_id is present
             if not adapter.get('id') and adapter.get('link'):
                 try:
+                    import re
                     match = re.search(r'view/(\d+)', adapter['link'])
                     if match:
                         adapter['id'] = match.group(1)
@@ -106,7 +107,7 @@ class LinkedinJobPipeline:
             
             # Ensure datetime is in consistent format
             if adapter.get('postedAt'):
-                adapter['postedAt'] = self._format_datetime(adapter['postedAt'])
+                adapter['postedAt'] = format_datetime(adapter['postedAt'])
             
             # Ensure scraped_at is present
             if not adapter.get('scraped_at'):
@@ -139,50 +140,6 @@ class LinkedinJobPipeline:
             spider.logger.error(f"Error processing item: {e}")
             spider.logger.error(traceback.format_exc())
             return item
-    
-    def _format_datetime(self, date_value):
-        """Format date to ISO format (YYYY-MM-DDTHH:MM:SS)"""
-        if not date_value:
-            return None
-            
-        try:
-            # If it's already in ISO format
-            if isinstance(date_value, str) and 'T' in date_value:
-                # Ensure it's properly formatted
-                dt = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
-                return dt.strftime('%Y-%m-%dT%H:%M:%S')
-            
-            # If it's a timestamp (integer)
-            if isinstance(date_value, (int, float)):
-                dt = datetime.fromtimestamp(date_value / 1000)  # Convert milliseconds to seconds
-                return dt.strftime('%Y-%m-%dT%H:%M:%S')
-                
-            # If it's a relative date string, use current date
-            return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-        except Exception as e:
-            self.logger.warning(f"Error formatting date {date_value}: {e}")
-            return None
-    
-    def _clean_text(self, text):
-        """
-        Clean text by removing extra whitespace
-        """
-        if not text:
-            return ""
-        return ' '.join(text.split())
-    
-    def _clean_html(self, html):
-        """
-        Enhanced HTML cleaning
-        """
-        if not html:
-            return ""
-            
-        # Remove script and style elements
-        html = re.sub(r'<script.*?>.*?</script>', '', html, flags=re.DOTALL)
-        html = re.sub(r'<style.*?>.*?</style>', '', html, flags=re.DOTALL)
-        
-        return html.strip()
     
     def _write_json_backup(self):
         """Write all collected items to a JSON file as backup"""

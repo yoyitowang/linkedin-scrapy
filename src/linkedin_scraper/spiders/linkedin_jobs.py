@@ -1,3 +1,6 @@
+"""
+LinkedIn Jobs Spider - Scrapes job listings from LinkedIn
+"""
 import scrapy
 import json
 import re
@@ -5,12 +8,11 @@ import time
 import logging
 import signal
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta  # Add timedelta import here
 from urllib.parse import urlencode
 from scrapy.exceptions import CloseSpider
 from scrapy.utils.log import configure_logging
 from ..items import LinkedinJobItem
-
 
 class LinkedinJobsSpider(scrapy.Spider):
     name = "linkedin_jobs"
@@ -266,121 +268,6 @@ class LinkedinJobsSpider(scrapy.Spider):
             if next_page:
                 yield response.follow(next_page, callback=self.parse_search_results)
     
-    def extract_json_data(self, response):
-        """Extract structured JSON data from the page source"""
-        # Try to find job data in script tags
-        script_data = response.xpath('//script[contains(text(), "jobPostingInfo") or contains(text(), "companyInfo") or contains(text(), "jobData")]/text()').getall()
-        
-        job_data = {}
-        
-        for script in script_data:
-            # Look for different data patterns
-            patterns = [
-                r'(\{"data":\{"jobPostingInfo":.*?\})(?=;)',
-                r'(\{"data":\{"companyInfo":.*?\})(?=;)',
-                r'(\{"data":\{"jobData":.*?\})(?=;)',
-                r'(window\.INITIAL_STATE\s*=\s*\{.*?\})(?=;)',
-                r'(\{.*?"jobPostingId":.*?\})(?=;)',
-                r'(\{.*?"companyId":.*?\})(?=;)'
-            ]
-            
-            for pattern in patterns:
-                matches = re.search(pattern, script, re.DOTALL)
-                if matches:
-                    try:
-                        data = json.loads(matches.group(1))
-                        # Merge with existing data
-                        job_data.update(data)
-                    except json.JSONDecodeError:
-                        if self.debug:
-                            self.logger.warning("Failed to parse JSON data from script")
-        
-        return job_data
-    
-    def clean_html(self, html_text):
-        """Clean HTML content"""
-        if not html_text:
-            return ""
-        
-        # Remove script and style elements
-        html_text = re.sub(r'<script.*?>.*?</script>', '', html_text, flags=re.DOTALL)
-        html_text = re.sub(r'<style.*?>.*?</style>', '', html_text, flags=re.DOTALL)
-        
-        # Convert <br> to newlines for better readability in plain text
-        html_text = re.sub(r'<br\s*/?>|<br\s*/?>', '\n', html_text)
-        
-        return html_text.strip()
-    
-    def parse_relative_time(self, relative_time_text):
-        """
-        Parse relative time text (like "5 hours ago", "2 days ago") 
-        and return an estimated datetime
-        """
-        if not relative_time_text:
-            return None
-            
-        now = datetime.now()
-        relative_time_text = relative_time_text.lower().strip()
-        
-        # Match patterns like "5 hours ago", "2 days ago", "1 week ago", etc.
-        minutes_match = re.search(r'(\d+)\s+minute', relative_time_text)
-        hours_match = re.search(r'(\d+)\s+hour', relative_time_text)
-        days_match = re.search(r'(\d+)\s+day', relative_time_text)
-        weeks_match = re.search(r'(\d+)\s+week', relative_time_text)
-        months_match = re.search(r'(\d+)\s+month', relative_time_text)
-        
-        if minutes_match:
-            minutes = int(minutes_match.group(1))
-            return now - timedelta(minutes=minutes)
-        elif hours_match:
-            hours = int(hours_match.group(1))
-            return now - timedelta(hours=hours)
-        elif days_match:
-            days = int(days_match.group(1))
-            return now - timedelta(days=days)
-        elif weeks_match:
-            weeks = int(weeks_match.group(1))
-            return now - timedelta(weeks=weeks)
-        elif months_match:
-            months = int(months_match.group(1))
-            # Approximate a month as 30 days
-            return now - timedelta(days=30*months)
-        elif "just now" in relative_time_text or "just posted" in relative_time_text:
-            return now
-        elif "yesterday" in relative_time_text:
-            return now - timedelta(days=1)
-        
-        # If we can't parse the relative time, return None
-        return None
-    
-    def format_datetime(self, date_value):
-        """Format date to ISO format (YYYY-MM-DDTHH:MM:SS)"""
-        if not date_value:
-            return None
-            
-        try:
-            # If it's already a datetime object
-            if isinstance(date_value, datetime):
-                return date_value.strftime('%Y-%m-%dT%H:%M:%S')
-                
-            # If it's already in ISO format
-            if isinstance(date_value, str) and 'T' in date_value:
-                # Ensure it's properly formatted
-                dt = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
-                return dt.strftime('%Y-%m-%dT%H:%M:%S')
-            
-            # If it's a timestamp (integer)
-            if isinstance(date_value, (int, float)):
-                dt = datetime.fromtimestamp(date_value / 1000)  # Convert milliseconds to seconds
-                return dt.strftime('%Y-%m-%dT%H:%M:%S')
-                
-            # If it's a relative date string, use current date
-            return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-        except Exception as e:
-            if self.debug:
-                self.logger.warning(f"Error formatting date {date_value}: {e}")
-            return None
-    
     def parse_job_details(self, response):
         """Parse the job details page with enhanced data extraction"""
         # Check if we've reached the job limit
@@ -395,10 +282,106 @@ class LinkedinJobsSpider(scrapy.Spider):
         job_item = LinkedinJobItem()
         
         # Try to extract structured data from the page
-        json_data = self.extract_json_data(response)
+        json_data = self._extract_json_data(response)
         
-        # IMPROVED JOB ID EXTRACTION - START
-        # Extract job ID using multiple methods to ensure we get a value
+        # Extract job ID using multiple methods
+        job_id = self._extract_job_id(response)
+        
+        # Extract basic job information
+        job_info = self._extract_basic_job_info(response)
+        
+        # Extract company information
+        company_info = self._extract_company_info(response)
+        
+        # Extract job details
+        job_details = self._extract_job_details(response)
+        
+        # Extract posting time information
+        posting_info = self._extract_posting_info(response)
+        
+        # Extract additional data from JSON if available
+        additional_data = self._extract_additional_data(json_data)
+        
+        # Record the scrape time
+        scraped_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        
+        # Now populate the job item in the desired order
+        # 1. ID first
+        job_item["id"] = job_id
+        # 2. Company name second
+        job_item["companyName"] = job_info.get("company_name")
+        # 3. Job title third
+        job_item["title"] = job_info.get("job_title")
+        # 4. Posted time fourth
+        job_item["postedAt"] = posting_info.get("posted_at")
+        # 5. Location fifth
+        job_item["location"] = job_info.get("location")
+        # 6. Employment type
+        if job_details.get("employment_type"):
+            job_item["employment_type"] = job_details.get("employment_type")
+        # 7. Seniority level
+        if job_details.get("seniority_level"):
+            job_item["seniority_level"] = job_details.get("seniority_level")
+        # 8. Easy apply flag
+        job_item["easyApply"] = job_details.get("easy_apply", False)
+        # 9. Job link
+        job_item["link"] = response.url
+        # 10. Company LinkedIn URL
+        if company_info.get("company_linkedin_url"):
+            job_item["companyLinkedinUrl"] = company_info.get("company_linkedin_url")
+        # 11. Skills
+        if job_details.get("skills"):
+            job_item["skills"] = job_details.get("skills")
+        # 12. Description text
+        job_item["descriptionText"] = job_details.get("job_description_text", "")
+        # 13. Scraping timestamp
+        job_item["scraped_at"] = scraped_at
+        
+        # Add any workplace types
+        if job_details.get("workplace_types"):
+            job_item["jobWorkplaceTypes"] = job_details.get("workplace_types")
+        
+        # Add insights if available
+        if job_details.get("insights"):
+            job_item["insights"] = job_details.get("insights")
+        
+        # Add company logo if available
+        if company_info.get("company_logo"):
+            job_item["companyLogo"] = company_info.get("company_logo")
+        
+        # Add application URL if available
+        if job_details.get("apply_url"):
+            job_item["applyUrl"] = job_details.get("apply_url")
+        
+        # Add company description if available
+        if company_info.get("company_description"):
+            job_item["companyDescription"] = company_info.get("company_description")
+        
+        # Add any additional data extracted from JSON
+        for key, value in additional_data.items():
+            if key not in job_item:
+                job_item[key] = value
+        
+        # In non-debug mode, only log minimal information
+        if not self.debug:
+            self.logger.info(f"Scraped job {self.job_count}: {job_item['title']} at {job_item['companyName']} (ID: {job_item['id']})")
+        else:
+            # In debug mode, log detailed information
+            self.logger.debug(f"Scraped job {self.job_count} details: {job_item['title']} at {job_item['companyName']} (ID: {job_item['id']})")
+            self.logger.debug(f"Full job data: {json.dumps({k: v for k, v in dict(job_item).items() if k != 'descriptionText'}, ensure_ascii=False)}")
+            self.logger.debug(f"Job description length: {len(job_item.get('descriptionText', ''))}")
+        
+        # Check if we've reached the job limit after processing this job
+        if self.max_jobs > 0 and self.job_count >= self.max_jobs:
+            self.logger.info(f"✅ Reached the maximum job count limit ({self.max_jobs}). This is the final job.")
+        
+        yield job_item
+        
+        # Check job limit after yielding the item
+        self.check_job_limit()
+    
+    def _extract_job_id(self, response):
+        """Extract job ID using multiple methods to ensure we get a value"""
         job_id = None
         
         # Method 1: Try to get from meta data
@@ -425,7 +408,7 @@ class LinkedinJobsSpider(scrapy.Spider):
                     break
         
         # Method 3: Try to extract from JSON data
-        if not job_id and json_data:
+        if not job_id and hasattr(response, 'json_data') and response.json_data:
             # Look for job ID in different possible JSON locations
             possible_id_fields = [
                 'data.jobPostingInfo.jobPostingId',
@@ -439,7 +422,7 @@ class LinkedinJobsSpider(scrapy.Spider):
             
             for field_path in possible_id_fields:
                 # Navigate through nested JSON using the field path
-                current = json_data
+                current = response.json_data
                 path_parts = field_path.split('.')
                 
                 for part in path_parts:
@@ -470,14 +453,31 @@ class LinkedinJobsSpider(scrapy.Spider):
             if self.debug:
                 self.logger.warning(f"Could not extract real job ID, generated fallback ID: {job_id}")
         
-        # IMPROVED JOB ID EXTRACTION - END
-        
+        return job_id
+    
+    def _extract_basic_job_info(self, response):
+        """Extract basic job information from the response"""
         # Extract data from meta or directly from the page if not available
-        job_title = response.meta.get("job_title") or response.css("h1.top-card-layout__title::text").get().strip()
-        company_name = response.meta.get("company_name") or response.css("a.topcard__org-name-link::text").get().strip()
-        location = response.meta.get("location") or response.css("span.topcard__flavor--bullet::text").get().strip()
-        job_link = response.url
-        
+        job_title = response.meta.get("job_title") or response.css("h1.top-card-layout__title::text").get()
+        if job_title:
+            job_title = job_title.strip()
+            
+        company_name = response.meta.get("company_name") or response.css("a.topcard__org-name-link::text").get()
+        if company_name:
+            company_name = company_name.strip()
+            
+        location = response.meta.get("location") or response.css("span.topcard__flavor--bullet::text").get()
+        if location:
+            location = location.strip()
+            
+        return {
+            "job_title": job_title,
+            "company_name": company_name,
+            "location": location
+        }
+    
+    def _extract_company_info(self, response):
+        """Extract company information from the response"""
         # Extract company logo
         company_logo = response.meta.get("company_logo") or response.css("img.artdeco-entity-image::attr(src)").get()
         
@@ -488,17 +488,25 @@ class LinkedinJobsSpider(scrapy.Spider):
         else:
             company_linkedin_url = None
         
+        # Extract company description
+        company_description = response.css("div.company-description__text::text").get()
+        if company_description:
+            company_description = company_description.strip()
+            
+        return {
+            "company_logo": company_logo,
+            "company_linkedin_url": company_linkedin_url,
+            "company_description": company_description
+        }
+    
+    def _extract_job_details(self, response):
+        """Extract detailed job information from the response"""
         # Extract application URL
         apply_url = response.css("a.apply-button::attr(href)").get()
         
         # Check if this is an Easy Apply job
         easy_apply_button = response.css("button.jobs-apply-button").get()
         easy_apply = bool(easy_apply_button)
-        
-        # Extract company description
-        company_description = response.css("div.company-description__text::text").get()
-        if company_description:
-            company_description = company_description.strip()
         
         # Extract workplace type
         workplace_types = []
@@ -513,13 +521,16 @@ class LinkedinJobsSpider(scrapy.Spider):
         seniority_level = None
         job_criteria = response.css("li.description__job-criteria-item")
         for criteria in job_criteria:
-            criteria_type = criteria.css("h3.description__job-criteria-subheader::text").get().strip()
-            criteria_value = criteria.css("span.description__job-criteria-text::text").get().strip()
-            
-            if "Seniority" in criteria_type:
-                seniority_level = criteria_value
-            elif "Employment" in criteria_type:
-                employment_type = criteria_value
+            criteria_type = criteria.css("h3.description__job-criteria-subheader::text").get()
+            if criteria_type:
+                criteria_type = criteria_type.strip()
+                criteria_value = criteria.css("span.description__job-criteria-text::text").get()
+                if criteria_value:
+                    criteria_value = criteria_value.strip()
+                    if "Seniority" in criteria_type:
+                        seniority_level = criteria_value
+                    elif "Employment" in criteria_type:
+                        employment_type = criteria_value
         
         # Extract insights about connections
         insights = []
@@ -540,10 +551,23 @@ class LinkedinJobsSpider(scrapy.Spider):
         # Extract job description
         job_description = response.css("div.description__text").get()
         if job_description:
-            job_description_text = self.clean_html(job_description)
+            job_description_text = self._clean_html(job_description)
         else:
             job_description_text = ""
-        
+            
+        return {
+            "apply_url": apply_url,
+            "easy_apply": easy_apply,
+            "workplace_types": workplace_types,
+            "employment_type": employment_type,
+            "seniority_level": seniority_level,
+            "insights": insights,
+            "skills": skills,
+            "job_description_text": job_description_text
+        }
+    
+    def _extract_posting_info(self, response):
+        """Extract job posting time information"""
         # Handle the posted date - try to get the actual job posting time
         # Try multiple sources to get the most accurate posting time
         posted_at = None
@@ -559,15 +583,20 @@ class LinkedinJobsSpider(scrapy.Spider):
             
         if relative_time_text:
             # Parse the relative time text to get an estimated datetime
-            posted_datetime = self.parse_relative_time(relative_time_text)
+            posted_datetime = self._parse_relative_time(relative_time_text)
             if posted_datetime:
-                posted_at = self.format_datetime(posted_datetime)
+                posted_at = self._format_datetime(posted_datetime)
         
         # If we still don't have a posting time, try the meta data from the search results page
         if not posted_at and response.meta.get("date_posted"):
-            posted_at = self.format_datetime(response.meta.get("date_posted"))
-        
-        # Extract additional data from JSON if available
+            posted_at = self._format_datetime(response.meta.get("date_posted"))
+            
+        return {
+            "posted_at": posted_at
+        }
+    
+    def _extract_additional_data(self, json_data):
+        """Extract additional data from JSON if available"""
         additional_data = {}
         if json_data:
             try:
@@ -611,91 +640,166 @@ class LinkedinJobsSpider(scrapy.Spider):
                         additional_data['recruiter'] = job_data['recruiter']
                     
                     # If we have a timestamp in the JSON data, use it for postedAt
-                    if 'listedAt' in job_data and not posted_at:
-                        posted_at = self.format_datetime(job_data['listedAt'])
+                    if 'listedAt' in job_data and not additional_data.get('postedAt'):
+                        additional_data['postedAt'] = self._format_datetime(job_data['listedAt'])
                     
                     # Extract skills if we don't have them yet
-                    if 'skills' in job_data and not skills:
-                        skills = job_data['skills']
+                    if 'skills' in job_data and not additional_data.get('skills'):
+                        additional_data['skills'] = job_data['skills']
                 
             except Exception as e:
                 if self.debug:
                     self.logger.warning(f"Error extracting additional data from JSON: {e}")
         
-        # Record the scrape time
-        scraped_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        return additional_data
+    
+    def _extract_json_data(self, response):
+        """Extract structured JSON data from the page source"""
+        # Try to find job data in script tags
+        script_data = response.xpath('//script[contains(text(), "jobPostingInfo") or contains(text(), "companyInfo") or contains(text(), "jobData")]/text()').getall()
         
-        # Now populate the job item in the desired order
-        # 1. ID first
-        job_item["id"] = job_id
-        # 2. Company name second
-        job_item["companyName"] = company_name
-        # 3. Job title third
-        job_item["title"] = job_title
-        # 4. Posted time fourth
-        job_item["postedAt"] = posted_at
-        # 5. Location fifth
-        job_item["location"] = location
-        # 6. Employment type
-        if employment_type:
-            job_item["employment_type"] = employment_type
-        # 7. Seniority level
-        if seniority_level:
-            job_item["seniority_level"] = seniority_level
-        # 8. Easy apply flag
-        job_item["easyApply"] = easy_apply
-        # 9. Job link
-        job_item["link"] = job_link
-        # 10. Company LinkedIn URL
-        if company_linkedin_url:
-            job_item["companyLinkedinUrl"] = company_linkedin_url
-        # 11. Skills
-        if skills:
-            job_item["skills"] = skills
-        # 12. Description text
-        job_item["descriptionText"] = job_description_text
-        # 13. Scraping timestamp
-        job_item["scraped_at"] = scraped_at
+        job_data = {}
         
-        # Add any workplace types
-        if workplace_types:
-            job_item["jobWorkplaceTypes"] = workplace_types
+        for script in script_data:
+            # Look for different data patterns
+            patterns = [
+                r'(\{"data":\{"jobPostingInfo":.*?\})(?=;)',
+                r'(\{"data":\{"companyInfo":.*?\})(?=;)',
+                r'(\{"data":\{"jobData":.*?\})(?=;)',
+                r'(window\.INITIAL_STATE\s*=\s*\{.*?\})(?=;)',
+                r'(\{.*?"jobPostingId":.*?\})(?=;)',
+                r'(\{.*?"companyId":.*?\})(?=;)'
+            ]
+            
+            for pattern in patterns:
+                matches = re.search(pattern, script, re.DOTALL)
+                if matches:
+                    try:
+                        data = json.loads(matches.group(1))
+                        # Merge with existing data
+                        job_data.update(data)
+                    except json.JSONDecodeError:
+                        if self.debug:
+                            pass  # Would log warning in real implementation
         
-        # Add insights if available
-        if insights:
-            job_item["insights"] = insights
+        return job_data
+    
+    def _clean_html(self, html_text):
+        """Clean HTML content and extract readable text without external dependencies"""
+        if not html_text:
+            return ""
         
-        # Add company logo if available
-        if company_logo:
-            job_item["companyLogo"] = company_logo
+        try:
+            # First, extract just the main content section which contains the job description
+            main_content_match = re.search(r'<div class="description__text[^>]*>(.*?)</div>\s*</section>', html_text, re.DOTALL)
+            if main_content_match:
+                html_text = main_content_match.group(1)
+            
+            # Remove all buttons and UI elements
+            html_text = re.sub(r'<button.*?</button>', '', html_text, flags=re.DOTALL)
+            html_text = re.sub(r'<icon.*?</icon>', '', html_text, flags=re.DOTALL)
+            
+            # Remove script and style elements
+            html_text = re.sub(r'<script.*?>.*?</script>', '', html_text, flags=re.DOTALL)
+            html_text = re.sub(r'<style.*?>.*?</style>', '', html_text, flags=re.DOTALL)
+            
+            # Replace common HTML elements with text formatting
+            html_text = re.sub(r'<br\s*/?>|<br\s*/?>', '\n', html_text)
+            html_text = re.sub(r'<li.*?>', '• ', html_text)
+            html_text = re.sub(r'</li>', '\n', html_text)
+            html_text = re.sub(r'</(p|div|h\d|ul|ol)>', '\n', html_text)
+            html_text = re.sub(r'<(p|div|h\d|ul|ol)[^>]*>', '', html_text)
+            
+            # Remove any remaining HTML tags
+            html_text = re.sub(r'<[^>]*>', '', html_text)
+            
+            # Handle special HTML entities
+            html_text = html_text.replace('&amp;', '&')
+            html_text = html_text.replace('&lt;', '<')
+            html_text = html_text.replace('&gt;', '>')
+            html_text = html_text.replace('&quot;', '"')
+            html_text = html_text.replace('&nbsp;', ' ')
+            
+            # Fix multiple consecutive newlines
+            html_text = re.sub(r'\n{3,}', '\n\n', html_text)
+            
+            # Fix multiple spaces
+            html_text = re.sub(r' {2,}', ' ', html_text)
+            
+            return html_text.strip()
+        except Exception:
+            # If all else fails, just return the original with tags stripped
+            return re.sub(r'<[^>]*>', '', html_text).strip()
+    
+    def _clean_text(self, text):
+        """Clean text by removing extra whitespace"""
+        if not text:
+            return ""
+        return ' '.join(text.split())
+    
+    def _parse_relative_time(self, relative_time_text):
+        """Parse relative time text (like "5 hours ago", "2 days ago") and return an estimated datetime"""
+        if not relative_time_text:
+            return None
+            
+        now = datetime.now()
+        relative_time_text = relative_time_text.lower().strip()
         
-        # Add application URL if available
-        if apply_url:
-            job_item["applyUrl"] = apply_url
+        # Match patterns like "5 hours ago", "2 days ago", "1 week ago", etc.
+        minutes_match = re.search(r'(\d+)\s+minute', relative_time_text)
+        hours_match = re.search(r'(\d+)\s+hour', relative_time_text)
+        days_match = re.search(r'(\d+)\s+day', relative_time_text)
+        weeks_match = re.search(r'(\d+)\s+week', relative_time_text)
+        months_match = re.search(r'(\d+)\s+month', relative_time_text)
         
-        # Add company description if available
-        if company_description:
-            job_item["companyDescription"] = company_description
+        if minutes_match:
+            minutes = int(minutes_match.group(1))
+            return now - timedelta(minutes=minutes)
+        elif hours_match:
+            hours = int(hours_match.group(1))
+            return now - timedelta(hours=hours)
+        elif days_match:
+            days = int(days_match.group(1))
+            return now - timedelta(days=days)
+        elif weeks_match:
+            weeks = int(weeks_match.group(1))
+            return now - timedelta(weeks=weeks)
+        elif months_match:
+            months = int(months_match.group(1))
+            # Approximate a month as 30 days
+            return now - timedelta(days=30*months)
+        elif "just now" in relative_time_text or "just posted" in relative_time_text:
+            return now
+        elif "yesterday" in relative_time_text:
+            return now - timedelta(days=1)
         
-        # Add any additional data extracted from JSON
-        for key, value in additional_data.items():
-            if key not in job_item:
-                job_item[key] = value
-        
-        # In non-debug mode, only log minimal information
-        if not self.debug:
-            self.logger.info(f"Scraped job {self.job_count}: {job_item['title']} at {job_item['companyName']} (ID: {job_item['id']})")
-        else:
-            # In debug mode, log detailed information
-            self.logger.debug(f"Scraped job {self.job_count} details: {job_item['title']} at {job_item['companyName']} (ID: {job_item['id']})")
-            self.logger.debug(f"Full job data: {json.dumps({k: v for k, v in dict(job_item).items() if k != 'descriptionText'}, ensure_ascii=False)}")
-            self.logger.debug(f"Job description length: {len(job_item.get('descriptionText', ''))}")
-        
-        # Check if we've reached the job limit after processing this job
-        if self.max_jobs > 0 and self.job_count >= self.max_jobs:
-            self.logger.info(f"✅ Reached the maximum job count limit ({self.max_jobs}). This is the final job.")
-        
-        yield job_item
-        
-        # Check job limit after yielding the item
-        self.check_job_limit()
+        # If we can't parse the relative time, return None
+        return None
+    
+    def _format_datetime(self, date_value):
+        """Format date to ISO format (YYYY-MM-DDTHH:MM:SS)"""
+        if not date_value:
+            return None
+            
+        try:
+            from datetime import datetime, timedelta
+            
+            # If it's already a datetime object
+            if isinstance(date_value, datetime):
+                return date_value.strftime('%Y-%m-%dT%H:%M:%S')
+                
+            # If it's already in ISO format
+            if isinstance(date_value, str) and 'T' in date_value:
+                # Ensure it's properly formatted
+                dt = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
+                return dt.strftime('%Y-%m-%dT%H:%M:%S')
+            
+            # If it's a timestamp (integer)
+            if isinstance(date_value, (int, float)):
+                dt = datetime.fromtimestamp(date_value / 1000)  # Convert milliseconds to seconds
+                return dt.strftime('%Y-%m-%dT%H:%M:%S')
+                
+            # If it's a relative date string, use current date
+            return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        except Exception:
+            return None
