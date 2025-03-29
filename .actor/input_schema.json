@@ -15,13 +15,6 @@
             "description": "Job location (e.g., 'San Francisco, CA')",
             "editor": "textfield"
         },
-        // "linkedin_session_id": {
-        //     "title": "LinkedIn Session ID",
-        //     "type": "string",
-        //     "description": "LinkedIn session ID cookie value for authentication (recommended for better results)",
-        //     "editor": "textfield",
-        //     "isSecret": true
-        // },
         "max_pages": {
             "title": "Maximum Pages",
             "type": "integer",
