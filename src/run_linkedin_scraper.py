@@ -21,14 +21,18 @@ def parse_arguments():
                         help='Job location (e.g., "San Francisco, CA")')
     
     # Optional arguments
-    parser.add_argument('--username', type=str,
-                        help='LinkedIn username/email for authentication')
-    parser.add_argument('--password', type=str,
-                        help='LinkedIn password for authentication')
+    parser.add_argument('--linkedin-session-id', type=str,
+                        help='LinkedIn session ID cookie (li_at) for authentication')
+    parser.add_argument('--linkedin-jsessionid', type=str,
+                        help='LinkedIn JSESSIONID cookie for authentication')
     parser.add_argument('--max-pages', type=int, default=5,
                         help='Maximum number of search result pages to scrape (default: 5)')
+    parser.add_argument('--max-jobs', type=int, default=10,
+                        help='Maximum number of jobs to scrape (default: 10)')
     parser.add_argument('--output', type=str, default='linkedin_jobs_output.json',
                         help='Output file path (default: linkedin_jobs_output.json)')
+    parser.add_argument('--debug', action='store_true',
+                        help='Enable debug mode with verbose logging')
     
     return parser.parse_args()
 
@@ -50,6 +54,12 @@ def main():
         },
     })
     
+    # Configure debug mode
+    if args.debug:
+        settings.set('LOG_LEVEL', 'DEBUG')
+    else:
+        settings.set('LOG_LEVEL', 'INFO')
+    
     # Create and configure the crawler process
     process = CrawlerProcess(settings)
     
@@ -57,9 +67,11 @@ def main():
     spider_kwargs = {
         'keyword': args.keyword,
         'location': args.location,
-        'username': args.username,
-        'password': args.password,
+        'linkedin_session_id': args.linkedin_session_id,
+        'linkedin_jsessionid': args.linkedin_jsessionid,
         'max_pages': args.max_pages,
+        'max_jobs': args.max_jobs,
+        'debug': args.debug,
     }
     
     # Start the crawler

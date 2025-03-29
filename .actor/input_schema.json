@@ -15,19 +15,13 @@
             "description": "Job location (e.g., 'San Francisco, CA')",
             "editor": "textfield"
         },
-        "linkedin_username": {
-            "title": "LinkedIn Username",
-            "type": "string",
-            "description": "LinkedIn username/email for authentication (recommended for better results)",
-            "editor": "textfield"
-        },
-        "linkedin_password": {
-            "title": "LinkedIn Password",
-            "type": "string",
-            "description": "LinkedIn password for authentication",
-            "editor": "textfield",
-            "isSecret": true
-        },
+        // "linkedin_session_id": {
+        //     "title": "LinkedIn Session ID",
+        //     "type": "string",
+        //     "description": "LinkedIn session ID cookie value for authentication (recommended for better results)",
+        //     "editor": "textfield",
+        //     "isSecret": true
+        // },
         "max_pages": {
             "title": "Maximum Pages",
             "type": "integer",

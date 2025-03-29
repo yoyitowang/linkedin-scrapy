@@ -43,26 +43,12 @@ def run_standalone_scraper(
     location: str = "United States",
     max_pages: int = 1,
     max_jobs: int = 10,
-    username: Optional[str] = None,
-    password: Optional[str] = None,
+    linkedin_session_id: Optional[str] = None,
+    linkedin_jsessionid: Optional[str] = None,
     debug: bool = False,
     start_urls: Optional[List[str]] = None
 ) -> str:
-    """Run the LinkedIn scraper as a standalone script.
-    
-    Args:
-        keyword: Search keyword
-        location: Location to search in
-        max_pages: Maximum number of search result pages to scrape
-        max_jobs: Maximum number of jobs to scrape
-        username: LinkedIn username for authentication
-        password: LinkedIn password for authentication
-        debug: Whether to enable debug logging
-        start_urls: Optional list of specific URLs to scrape
-        
-    Returns:
-        Path to the output JSON file
-    """
+    """Run the LinkedIn scraper as a standalone script."""
     # Generate timestamp for unique filenames
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     
@@ -78,6 +64,13 @@ def run_standalone_scraper(
     os.makedirs(dataset_dir, exist_ok=True)
     
     print(f"Using parameters: keyword={keyword}, location={location}, max_pages={max_pages}, max_jobs={max_jobs}")
+    if linkedin_session_id:
+        print("LinkedIn session ID provided for authentication")
+        if linkedin_jsessionid:
+            print("LinkedIn JSESSIONID also provided")
+    else:
+        print("No LinkedIn session cookies provided. Some job details may not be accessible.")
+    
     print(f"Debug mode: {debug}")
     print(f"Output will be written to: {json_output}")
     
@@ -112,8 +105,8 @@ def run_standalone_scraper(
     spider_kwargs = {
         'keyword': keyword,
         'location': location,
-        'username': username,
-        'password': password,
+        'linkedin_session_id': linkedin_session_id,
+        'linkedin_jsessionid': linkedin_jsessionid,
         'max_pages': max_pages,
         'max_jobs': max_jobs,
         'debug': debug,
@@ -123,26 +116,22 @@ def run_standalone_scraper(
     # Start the crawler
     print(f"Starting LinkedIn Jobs Spider at {datetime.datetime.now().isoformat()}...")
     process.crawl(LinkedinJobsSpider, **spider_kwargs)
-    process.start()
+    process.start()  # This will block until the crawling is finished
     print(f"Spider finished at {datetime.datetime.now().isoformat()}.")
     
     return json_output
 
 
 def read_input_from_file() -> Dict[str, Any]:
-    """Read input parameters from various possible input file locations.
-    
-    Returns:
-        Dictionary containing input parameters
-    """
+    """Read input parameters from various possible input file locations."""
     # Default values
     input_data = {
         "keyword": "software developer",
         "location": "United States",
         "max_pages": 1,
         "max_jobs": 10,
-        "linkedin_username": None,
-        "linkedin_password": None,
+        "linkedin_session_id": None,
+        "linkedin_jsessionid": None,
         "debug": False
     }
     
@@ -170,11 +159,20 @@ def read_input_from_file() -> Dict[str, Any]:
                     for key in input_data:
                         if key in file_data:
                             input_data[key] = file_data[key]
-                    # Special case for username/password
-                    if 'linkedin_username' in file_data:
-                        input_data['linkedin_username'] = file_data['linkedin_username']
-                    if 'linkedin_password' in file_data:
-                        input_data['linkedin_password'] = file_data['linkedin_password']
+                    
+                    # Check for LinkedIn session cookies under different possible names
+                    if 'linkedin_session_id' in file_data:
+                        input_data['linkedin_session_id'] = file_data['linkedin_session_id']
+                        print(f"Found LinkedIn session ID")
+                    
+                    if 'linkedin_jsessionid' in file_data:
+                        input_data['linkedin_jsessionid'] = file_data['linkedin_jsessionid']
+                        print(f"Found LinkedIn JSESSIONID")
+                    
+                    # Handle legacy session_cookies field
+                    if 'session_cookies' in file_data and file_data['session_cookies']:
+                        print("Warning: 'session_cookies' is deprecated. Please use 'linkedin_session_id' and 'linkedin_jsessionid' instead.")
+                    
                     print(f"Read input from {input_file}: keyword={input_data['keyword']}, location={input_data['location']}")
                 break
         except Exception as e:
@@ -183,11 +181,30 @@ def read_input_from_file() -> Dict[str, Any]:
     return input_data
 
 
-# Create a custom item pipeline to collect items in memory
+async def process_apify_items():
+    """Process items collected in memory and push them to the Apify dataset."""
+    if not APIFY_AVAILABLE:
+        return
+        
+    global SCRAPED_ITEMS
+    
+    # Push all items to the default dataset
+    if SCRAPED_ITEMS:
+        Actor.log.info(f"Pushing {len(SCRAPED_ITEMS)} items to the default dataset")
+        await Actor.push_data(SCRAPED_ITEMS)
+    else:
+        Actor.log.warning("No items were scraped")
+
+
 class MemoryStoragePipeline:
+    """Pipeline that stores items in memory for later processing by Apify."""
+    
     def process_item(self, item, spider):
-        # Store the item in our global list
-        SCRAPED_ITEMS.append(dict(item))
+        """Store the item in memory."""
+        global SCRAPED_ITEMS
+        # Convert item to dict and store in memory
+        item_dict = dict(item)
+        SCRAPED_ITEMS.append(item_dict)
         return item
 
 
@@ -208,10 +225,17 @@ async def run_apify_actor() -> None:
         # Extract parameters from input
         keyword = actor_input.get('keyword')
         location = actor_input.get('location')
-        linkedin_username = actor_input.get('linkedin_username')
-        linkedin_password = actor_input.get('linkedin_password')
+        
+        # Extract LinkedIn session cookies
+        linkedin_session_id = actor_input.get('linkedin_session_id')
+        linkedin_jsessionid = actor_input.get('linkedin_jsessionid')
+        
+        # Log warning for deprecated session_cookies field
+        if 'session_cookies' in actor_input and actor_input['session_cookies']:
+            Actor.log.warning("'session_cookies' is deprecated. Please use 'linkedin_session_id' and 'linkedin_jsessionid' instead.")
+        
         max_pages = actor_input.get('max_pages', 5)
-        max_jobs = actor_input.get('max_jobs', 0)  # Parameter for job count limit
+        max_jobs = actor_input.get('max_jobs', 0)
         start_urls = [url.get('url') for url in actor_input.get('start_urls', [])]
         debug = actor_input.get('debug', False)
         
@@ -228,6 +252,14 @@ async def run_apify_actor() -> None:
             Actor.log.info(f"Starting LinkedIn job scraping for {len(start_urls)} specific URLs")
             
         Actor.log.info(f"Debug mode: {'enabled' if debug else 'disabled'}")
+        
+        # Log authentication status
+        if linkedin_session_id:
+            Actor.log.info("LinkedIn session ID provided for authentication")
+            if linkedin_jsessionid:
+                Actor.log.info("LinkedIn JSESSIONID also provided")
+        else:
+            Actor.log.warning("No LinkedIn session cookies provided. Some job details may not be accessible.")
         
         # Log job limit if set
         if max_jobs > 0:
@@ -265,8 +297,8 @@ async def run_apify_actor() -> None:
         spider_kwargs = {
             'keyword': keyword,
             'location': location,
-            'username': linkedin_username,
-            'password': linkedin_password,
+            'linkedin_session_id': linkedin_session_id,
+            'linkedin_jsessionid': linkedin_jsessionid,
             'max_pages': max_pages,
             'max_jobs': max_jobs,
             'start_urls': start_urls,
@@ -290,141 +322,39 @@ async def run_apify_actor() -> None:
         await process_apify_items()
 
 
-async def process_apify_items() -> None:
-    """Process the items collected in memory and push to Apify dataset."""
-    global SCRAPED_ITEMS
-    
-    try:
-        # Check if we have any items
-        job_count = len(SCRAPED_ITEMS)
-        
-        if job_count == 0:
-            Actor.log.warning("No jobs were found during scraping.")
-            Actor.log.info("This could be due to:")
-            Actor.log.info("- No matching jobs found for the given criteria")
-            Actor.log.info("- LinkedIn might be blocking the scraping attempt")
-            Actor.log.info("- There might be an issue with the search parameters")
-            return
-            
-        Actor.log.info(f"Successfully scraped {job_count} LinkedIn jobs")
-        
-        # Get the default dataset
-        default_dataset = await Actor.open_dataset()
-        
-        # Push data to the dataset in batch mode
-        try:
-            # Push all data at once for efficiency
-            await default_dataset.push_data(SCRAPED_ITEMS)
-            Actor.log.info(f"Successfully pushed {job_count} jobs to Apify dataset in batch")
-        except Exception as batch_error:
-            Actor.log.warning(f"Batch push failed: {batch_error}. Trying individual pushes...")
-            
-            # Fallback to individual pushes if batch fails
-            success_count = 0
-            for job in SCRAPED_ITEMS:
-                try:
-                    await default_dataset.push_data(job)
-                    success_count += 1
-                except Exception as e:
-                    Actor.log.error(f"Failed to push job: {str(e)}")
-            
-            Actor.log.info(f"Pushed {success_count}/{job_count} jobs to Apify dataset individually")
-        
-        # Generate CSV directly from the items in memory
-        try:
-            # Create the directory structure if it doesn't exist
-            csv_dir = '/usr/src/app/apify_storage/datasets/default'
-            os.makedirs(csv_dir, exist_ok=True)
-            
-            # Define CSV output path
-            csv_output = os.path.join(csv_dir, 'linkedin_jobs.csv')
-            
-            # Generate CSV manually from the items in memory
-            import csv
-            # Get all possible field names from all items
-            fieldnames = set()
-            for item in SCRAPED_ITEMS:
-                fieldnames.update(item.keys())
-            
-            # Remove HTML description to make CSV more readable
-            if 'job_description' in fieldnames:
-                fieldnames.remove('job_description')
-            
-            # Write to CSV
-            with open(csv_output, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=sorted(fieldnames))
-                writer.writeheader()
-                
-                for item in SCRAPED_ITEMS:
-                    # Create a copy without HTML description for CSV
-                    csv_item = {k: v for k, v in item.items() if k != 'job_description'}
-                    writer.writerow(csv_item)
-            Actor.log.info(f"Generated CSV at: {csv_output}")
-        except Exception as e2:
-            Actor.log.error(f"Could not generate CSV: {e2}")
-            Actor.log.error(traceback.format_exc())
-        
-        # Store files in key-value store for easy download
-        try:
-            default_key_value_store = await Actor.open_key_value_store()
-            
-            # Store the JSON data - pass the Python object directly
-            await default_key_value_store.set_value(
-                'linkedin_jobs.json', 
-                SCRAPED_ITEMS,  # Pass the Python object directly, SDK handles serialization
-                content_type='application/json'
-            )
-            Actor.log.info("Saved JSON output to key-value store")
-            
-            # Store the CSV file if it exists
-            csv_output = os.path.join(csv_dir, 'linkedin_jobs.csv')
-            if os.path.exists(csv_output):
-                with open(csv_output, 'rb') as f:
-                    await default_key_value_store.set_value(
-                        'linkedin_jobs.csv', 
-                        f.read(), 
-                        content_type='text/csv'
-                    )
-                Actor.log.info("Saved CSV output to key-value store")
-        except Exception as e:
-            Actor.log.error(f"Error storing files in key-value store: {e}")
-        
-    except Exception as e:
-        Actor.log.error(f"Error processing scraped items: {e}")
-        Actor.log.error(traceback.format_exc())
-
-
 def main() -> None:
-    """Main entry point for the LinkedIn Job Scraper.
-    
-    This function detects the environment (standalone or Apify) and runs
-    the appropriate version of the scraper.
-    """
+    """Main entry point for the LinkedIn Job Scraper."""
     print("LinkedIn Job Scraper starting...")
     
-    # Check if we're running in Apify environment
-    if 'APIFY_ACTOR_ID' in os.environ and APIFY_AVAILABLE:
-        print("Running in Apify environment. Starting Actor...")
-        import asyncio
-        asyncio.run(run_apify_actor())
-    else:
-        print("Running in standalone mode...")
-        # Read input from file
-        input_data = read_input_from_file()
+    try:
+        # Check if we're running in Apify environment
+        if 'APIFY_ACTOR_ID' in os.environ and APIFY_AVAILABLE:
+            print("Running in Apify environment. Starting Actor...")
+            import asyncio
+            asyncio.run(run_apify_actor())
+        else:
+            print("Running in standalone mode...")
+            # Read input from file
+            input_data = read_input_from_file()
+            
+            # Run the standalone scraper
+            run_standalone_scraper(
+                keyword=input_data.get('keyword'),
+                location=input_data.get('location'),
+                max_pages=int(input_data.get('max_pages', 1)),
+                max_jobs=int(input_data.get('max_jobs', 10)),
+                linkedin_session_id=input_data.get('linkedin_session_id'),
+                linkedin_jsessionid=input_data.get('linkedin_jsessionid'),
+                debug=bool(input_data.get('debug', False))
+            )
         
-        # Run the standalone scraper
-        run_standalone_scraper(
-            keyword=input_data.get('keyword'),
-            location=input_data.get('location'),
-            max_pages=int(input_data.get('max_pages', 1)),
-            max_jobs=int(input_data.get('max_jobs', 10)),
-            username=input_data.get('linkedin_username'),
-            password=input_data.get('linkedin_password'),
-            debug=bool(input_data.get('debug', False))
-        )
-    
-    print("LinkedIn Job Scraper finished.")
+        print("LinkedIn Job Scraper finished.")
+    except Exception as e:
+        print(f"Error in LinkedIn Job Scraper: {e}")
+        traceback.print_exc()
+        sys.exit(1)
 
 
+# This is executed when the script is run directly
 if __name__ == "__main__":
     main()

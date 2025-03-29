@@ -8,7 +8,7 @@ import time
 import logging
 import signal
 import sys
-from datetime import datetime, timedelta  # Add timedelta import here
+from datetime import datetime, timedelta
 from urllib.parse import urlencode
 from scrapy.exceptions import CloseSpider
 from scrapy.utils.log import configure_logging
@@ -25,31 +25,37 @@ class LinkedinJobsSpider(scrapy.Spider):
         'COOKIES_ENABLED': True,
         'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'CONCURRENT_REQUESTS': 1,  # Limit concurrent requests
-        # Ensure data is written immediately when items are scraped
-        'FEEDS': {
-            'apify_storage/datasets/default/linkedin_jobs_output_%(time)s.json': {
-                'format': 'json',
-                'encoding': 'utf8',
-                'indent': 4,
-                'overwrite': True,
-            },
-        },
         # Ensure clean shutdown
         'CLOSESPIDER_TIMEOUT': 0,  # Disable timeout-based shutdown
     }
     
-    def __init__(self, keyword=None, location=None, username=None, password=None, max_pages=5, max_jobs=0, start_urls=None, debug=False, *args, **kwargs):
+    def __init__(self, keyword=None, location=None, linkedin_session_id=None, linkedin_jsessionid=None, max_pages=5, max_jobs=0, start_urls=None, debug=False, *args, **kwargs):
         super(LinkedinJobsSpider, self).__init__(*args, **kwargs)
         self.keyword = keyword
         self.location = location
-        self.linkedin_username = username
-        self.linkedin_password = password
+        self.linkedin_session_id = linkedin_session_id
+        self.linkedin_jsessionid = linkedin_jsessionid
         self.max_pages = int(max_pages)
         self.max_jobs = int(max_jobs)  # Parameter for job count limit
         self.page_count = 0
         self.job_count = 0  # Counter for scraped jobs
         self.start_urls_list = start_urls or []
         self.debug = debug
+        
+        # Initialize cookies dictionary
+        self.cookies = {}
+        
+        # Process LinkedIn session cookies if provided
+        if self.linkedin_session_id:
+            self.cookies['li_at'] = self.linkedin_session_id
+            if self.debug:
+                self.logger.debug(f"Using LinkedIn session ID: {self.linkedin_session_id[:10]}...")
+        
+        # Add JSESSIONID if provided
+        if self.linkedin_jsessionid:
+            self.cookies['JSESSIONID'] = self.linkedin_jsessionid
+            if self.debug:
+                self.logger.debug(f"Using LinkedIn JSESSIONID: {self.linkedin_jsessionid[:10]}...")
         
         # Register signal handlers for graceful shutdown
         self.register_shutdown_handlers()
@@ -122,58 +128,50 @@ class LinkedinJobsSpider(scrapy.Spider):
         })
     
     def start_requests(self):
-        """Start with either login page or direct URLs"""
+        """Start with either session verification or direct URLs"""
         # If specific job URLs are provided, scrape those first
         if self.start_urls_list:
             self.logger.info(f"Starting with {len(self.start_urls_list)} provided job URLs")
             for url in self.start_urls_list:
                 if "linkedin.com/jobs/view" in url:
-                    yield scrapy.Request(url=url, callback=self.parse_job_details)
+                    yield scrapy.Request(
+                        url=url, 
+                        callback=self.parse_job_details,
+                        cookies=self.cookies
+                    )
         
-        # If credentials are provided, start with login
-        if self.linkedin_username and self.linkedin_password:
+        # If LinkedIn session cookies are provided, verify them first
+        if self.linkedin_session_id:
+            self.logger.info("LinkedIn session cookies provided, verifying authentication...")
+            
+            # Make a request to LinkedIn with the session cookies to verify
             yield scrapy.Request(
-                url="https://www.linkedin.com/login",
-                callback=self.login,
+                url="https://www.linkedin.com/feed/",  # LinkedIn feed page to check if logged in
+                cookies=self.cookies,
+                callback=self.verify_session,
                 meta={"dont_redirect": True}
             )
         else:
-            # If no credentials, try to search without login
-            self.logger.warning("No LinkedIn credentials provided. Some job details may not be accessible.")
+            # If no session cookies, try to search without authentication
+            self.logger.warning("No LinkedIn session cookies provided. Some job details may not be accessible.")
             yield from self.start_job_search()
     
-    def login(self, response):
-        """Handle login process"""
-        self.logger.info("Logging in to LinkedIn...")
-        
-        # Extract CSRF token if needed
-        csrf_token = response.css('input[name="csrfToken"]::attr(value)').get()
-        
-        # Submit login form
-        yield scrapy.FormRequest.from_response(
-            response,
-            formdata={
-                'session_key': self.linkedin_username,
-                'session_password': self.linkedin_password,
-                'csrfToken': csrf_token
-            },
-            callback=self.after_login
-        )
-    
-    def after_login(self, response):
-        """Check if login was successful and start job search"""
-        # Check if login was successful by looking for error messages
-        if "error" in response.url or response.css(".form-error-message").get():
-            self.logger.error("Login failed")
-            return
-        
-        self.logger.info("Successfully logged in to LinkedIn")
-        yield from self.start_job_search()
+    def verify_session(self, response):
+        """Verify the session cookies are valid"""
+        # Check if we're logged in by looking for feed content or redirects to login page
+        if "login" in response.url or "checkpoint" in response.url:
+            self.logger.error("LinkedIn session cookies are invalid or expired. Please provide fresh LinkedIn session cookies.")
+            # Try to continue without authentication
+            yield from self.start_job_search()
+        else:
+            self.logger.info("Successfully authenticated using LinkedIn session cookies")
+            yield from self.start_job_search()
     
     def start_job_search(self):
         """Start the job search process"""
         # Construct the search URL
         if self.keyword and self.location:
+            self.logger.info(f"Starting job search for '{self.keyword}' in '{self.location}'")
             params = {
                 'keywords': self.keyword,
                 'location': self.location,
@@ -182,7 +180,12 @@ class LinkedinJobsSpider(scrapy.Spider):
                 'pageNum': 0
             }
             search_url = f"https://www.linkedin.com/jobs/search/?{urlencode(params)}"
-            yield scrapy.Request(url=search_url, callback=self.parse_search_results)
+            self.logger.info(f"Searching jobs at URL: {search_url}")
+            yield scrapy.Request(
+                url=search_url, 
+                callback=self.parse_search_results,
+                cookies=self.cookies
+            )
         else:
             self.logger.error("Keyword and location parameters are required for job search")
     
@@ -194,6 +197,132 @@ class LinkedinJobsSpider(scrapy.Spider):
             raise CloseSpider(f"Reached maximum job count: {self.max_jobs}")
     
     def parse_search_results(self, response):
+        """Parse the job search results page"""
+        # Check if we've reached the job limit
+        self.check_job_limit()
+            
+        self.page_count += 1
+        self.logger.info(f"Parsing search results page {self.page_count} from: {response.url}")
+        
+        # Debug: Log a sample of the response HTML to see what we're working with
+        if self.debug:
+            self.logger.debug(f"Response HTML sample: {response.text[:500]}...")
+        
+        # Try different CSS selectors for job cards
+        job_cards = response.css("div.base-card")
+        
+        if not job_cards:
+            self.logger.warning(f"No job cards found with primary selector. Trying alternative selectors...")
+            # Try alternative selectors
+            job_cards = response.css("li.jobs-search-results__list-item")
+            
+            if not job_cards:
+                job_cards = response.css("div.job-search-card")
+                
+                if not job_cards:
+                    self.logger.warning("No job cards found with any selector. This might indicate:")
+                    self.logger.warning("1. LinkedIn has changed their HTML structure")
+                    self.logger.warning("2. The search returned no results")
+                    self.logger.warning("3. LinkedIn is blocking the scraper")
+                    
+                    # Log the full HTML for debugging
+                    self.logger.info("Saving response HTML for debugging")
+                    with open("linkedin_response.html", "w", encoding="utf-8") as f:
+                        f.write(response.text)
+                    
+                    # Try to extract any job-related links as a fallback
+                    job_links = response.css("a[href*='/jobs/view/']::attr(href)").getall()
+                    if job_links:
+                        self.logger.info(f"Found {len(job_links)} job links directly. Attempting to process these.")
+                        for job_link in job_links:
+                            yield response.follow(
+                                job_link,
+                                callback=self.parse_job_details,
+                                cookies=self.cookies
+                            )
+        
+        self.logger.info(f"Found {len(job_cards)} job cards on page {self.page_count}")
+        
+        for job_card in job_cards:
+            # Check if we've reached the job limit before processing each job
+            if self.max_jobs > 0 and self.job_count >= self.max_jobs:
+                self.logger.info(f"✅ Reached the maximum job count limit ({self.max_jobs}) while parsing results. Stopping.")
+                return
+                
+            # Try different selectors for job links
+            job_link = job_card.css("a.base-card__full-link::attr(href)").get()
+            if not job_link:
+                job_link = job_card.css("a[href*='/jobs/view/']::attr(href)").get()
+            
+            if job_link:
+                # Extract basic job info from the card
+                job_title = job_card.css("h3.base-search-card__title::text, h3.job-search-card__title::text").get()
+                if job_title:
+                    job_title = job_title.strip()
+                
+                company_name = job_card.css("h4.base-search-card__subtitle a::text, span.job-search-card__company-name::text").get()
+                if company_name:
+                    company_name = company_name.strip()
+                
+                location = job_card.css("span.job-search-card__location::text").get()
+                if location:
+                    location = location.strip()
+                
+                # Extract posted date if available
+                date_posted = job_card.css("time::attr(datetime)").get()
+                
+                # Extract the relative time text (e.g., "5 hours ago", "2 days ago")
+                relative_time = job_card.css("time::text").get()
+                if relative_time:
+                    relative_time = relative_time.strip()
+                
+                # Extract company logo if available
+                company_logo = job_card.css("img.artdeco-entity-image::attr(src)").get()
+                
+                # Extract job ID from the URL
+                job_id = None
+                if job_link:
+                    match = re.search(r'view/(\d+)', job_link)
+                    if match:
+                        job_id = match.group(1)
+                
+                # Only log detailed info in debug mode
+                if self.debug:
+                    self.logger.debug(f"Found job: {job_title} at {company_name} in {location}")
+                else:
+                    self.logger.info(f"Found job: {job_title} at {company_name}")
+                
+                yield scrapy.Request(
+                    url=job_link,
+                    callback=self.parse_job_details,
+                    cookies=self.cookies,
+                    meta={
+                        "job_title": job_title,
+                        "company_name": company_name,
+                        "location": location,
+                        "date_posted": date_posted,
+                        "relative_time": relative_time,
+                        "company_logo": company_logo,
+                        "job_id": job_id
+                    }
+                )
+            else:
+                self.logger.warning("Found a job card but couldn't extract the job link")
+        
+        # Follow pagination if we haven't reached max_pages and haven't hit the job limit
+        if self.page_count < self.max_pages and (self.max_jobs == 0 or self.job_count < self.max_jobs):
+            next_page = response.css("a.artdeco-pagination__button--next::attr(href)").get()
+            if next_page:
+                self.logger.info(f"Following pagination to page {self.page_count + 1}")
+                yield response.follow(
+                    next_page, 
+                    callback=self.parse_search_results,
+                    cookies=self.cookies
+                )
+            else:
+                self.logger.info("No more pages to follow")
+        elif self.page_count >= self.max_pages:
+            self.logger.info(f"Reached maximum page limit ({self.max_pages}). Stopping pagination.")
         """Parse the job search results page"""
         # Check if we've reached the job limit
         self.check_job_limit()
@@ -251,6 +380,7 @@ class LinkedinJobsSpider(scrapy.Spider):
                 yield scrapy.Request(
                     url=job_link,
                     callback=self.parse_job_details,
+                    cookies=self.cookies,  # Use the parsed cookies
                     meta={
                         "job_title": job_title,
                         "company_name": company_name,
@@ -266,9 +396,87 @@ class LinkedinJobsSpider(scrapy.Spider):
         if self.page_count < self.max_pages and (self.max_jobs == 0 or self.job_count < self.max_jobs):
             next_page = response.css("a.artdeco-pagination__button--next::attr(href)").get()
             if next_page:
-                yield response.follow(next_page, callback=self.parse_search_results)
-    
+                yield response.follow(
+                    next_page, 
+                    callback=self.parse_search_results,
+                    cookies=self.cookies  # Use the parsed cookies
+                )
+   
     def parse_job_details(self, response):
+        """Parse the job details page"""
+        self.logger.info(f"Parsing job details from: {response.url}")
+        
+        # Increment job counter
+        self.job_count += 1
+        
+        # Extract job ID from URL if not already in meta
+        job_id = response.meta.get('job_id')
+        if not job_id:
+            match = re.search(r'view/(\d+)', response.url)
+            if match:
+                job_id = match.group(1)
+        
+        # Get job details from meta or extract from page
+        job_title = response.meta.get('job_title')
+        if not job_title:
+            job_title = response.css("h1.job-details-jobs-unified-top-card__job-title::text").get()
+            if job_title:
+                job_title = job_title.strip()
+        
+        company_name = response.meta.get('company_name')
+        if not company_name:
+            company_name = response.css("a.job-details-jobs-unified-top-card__company-name::text").get()
+            if company_name:
+                company_name = company_name.strip()
+        
+        location = response.meta.get('location')
+        if not location:
+            location = response.css("span.job-details-jobs-unified-top-card__bullet::text").get()
+            if location:
+                location = location.strip()
+        
+        # Extract job description
+        description_container = response.css("div.job-details-jobs-unified-description__container")
+        description_text = ""
+        if description_container:
+            # Extract all text from the description container
+            description_text = " ".join(description_container.css("::text").getall())
+            description_text = description_text.strip()
+        
+        # Extract other job details
+        employment_type = None
+        seniority_level = None
+        
+        criteria_items = response.css("li.job-details-jobs-unified-top-card__job-insight")
+        for item in criteria_items:
+            text = " ".join(item.css("::text").getall()).strip()
+            if "Employment type" in text:
+                employment_type = text.replace("Employment type", "").strip()
+            elif "Seniority level" in text:
+                seniority_level = text.replace("Seniority level", "").strip()
+        
+        # Create job item
+        job_item = LinkedinJobItem()
+        job_item['id'] = job_id
+        job_item['title'] = job_title
+        job_item['companyName'] = company_name
+        job_item['location'] = location
+        job_item['link'] = response.url
+        job_item['descriptionText'] = description_text
+        job_item['employment_type'] = employment_type
+        job_item['seniority_level'] = seniority_level
+        job_item['postedAt'] = response.meta.get('date_posted')
+        job_item['scraped_at'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        
+        # Log success
+        self.logger.info(f"Successfully scraped job {self.job_count}: {job_title} at {company_name}")
+        
+        # Check if we've reached the job limit
+        if self.max_jobs > 0 and self.job_count >= self.max_jobs:
+            self.logger.info(f"✅ Reached the maximum job count limit ({self.max_jobs}). Stopping the scraper.")
+            raise CloseSpider(f"Reached maximum job count: {self.max_jobs}")
+        
+        yield job_item
         """Parse the job details page with enhanced data extraction"""
         # Check if we've reached the job limit
         if self.max_jobs > 0 and self.job_count >= self.max_jobs:
