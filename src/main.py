@@ -36,6 +36,8 @@ except ImportError:
 
 # Global variable to store scraped items in memory
 SCRAPED_ITEMS = []
+# Global variable to store job URLs for queueing
+JOB_URLS = []
 
 
 def run_standalone_scraper(
@@ -48,7 +50,9 @@ def run_standalone_scraper(
     linkedin_session_id: Optional[str] = None,
     linkedin_jsessionid: Optional[str] = None,
     debug: bool = False,
-    start_urls: Optional[List[str]] = None
+    start_urls: Optional[List[str]] = None,
+    collect_urls_only: bool = False,
+    process_url: Optional[str] = None
 ) -> str:
     """Run the LinkedIn scraper as a standalone script."""
     # Generate timestamp for unique filenames
@@ -65,16 +69,27 @@ def run_standalone_scraper(
     # Ensure directory exists
     os.makedirs(dataset_dir, exist_ok=True)
     
-    # Log parameters based on search mode
-    if search_mode == "keyword_location":
-        print(f"Search mode: Keyword & Location")
-        print(f"Using parameters: keyword={keyword}, location={location}, max_pages={max_pages}, max_jobs={max_jobs}")
-    elif search_mode == "company":
-        print(f"Search mode: Company")
-        print(f"Using parameters: company={company}, max_pages={max_pages}, max_jobs={max_jobs}")
-    elif search_mode == "specific_urls":
-        print(f"Search mode: Specific URLs")
-        print(f"Using {len(start_urls) if start_urls else 0} specific job URLs")
+    # Log parameters based on search mode and operation mode
+    if process_url:
+        print(f"Processing single job URL: {process_url}")
+    elif collect_urls_only:
+        print(f"Collecting job URLs only (no job details)")
+        if search_mode == "keyword_location":
+            print(f"Search mode: Keyword & Location")
+            print(f"Using parameters: keyword={keyword}, location={location}, max_pages={max_pages}, max_jobs={max_jobs}")
+        elif search_mode == "company":
+            print(f"Search mode: Company")
+            print(f"Using parameters: company={company}, max_pages={max_pages}, max_jobs={max_jobs}")
+    else:
+        if search_mode == "keyword_location":
+            print(f"Search mode: Keyword & Location")
+            print(f"Using parameters: keyword={keyword}, location={location}, max_pages={max_pages}, max_jobs={max_jobs}")
+        elif search_mode == "company":
+            print(f"Search mode: Company")
+            print(f"Using parameters: company={company}, max_pages={max_pages}, max_jobs={max_jobs}")
+        elif search_mode == "specific_urls":
+            print(f"Search mode: Specific URLs")
+            print(f"Using {len(start_urls) if start_urls else 0} specific job URLs")
     
     if linkedin_session_id:
         print("LinkedIn session ID provided for authentication")
@@ -113,16 +128,23 @@ def run_standalone_scraper(
     # Create crawler process with our settings
     process = CrawlerProcess(settings)
     
-    # Configure spider parameters based on search mode
+    # Configure spider parameters based on search mode and operation mode
     spider_kwargs = {
         'max_pages': max_pages,
         'max_jobs': max_jobs,
         'linkedin_session_id': linkedin_session_id,
         'linkedin_jsessionid': linkedin_jsessionid,
         'debug': debug,
-        'start_urls': start_urls,
+        'collect_urls_only': collect_urls_only,
     }
     
+    # If processing a single URL
+    if process_url:
+        spider_kwargs['start_urls'] = [process_url]
+        spider_kwargs['process_job_details_only'] = True
+    else:
+        spider_kwargs['start_urls'] = start_urls
+        
     # Add parameters based on search mode
     if search_mode == "keyword_location":
         spider_kwargs['keyword'] = keyword
@@ -151,7 +173,9 @@ def read_input_from_file() -> Dict[str, Any]:
         "max_jobs": 10,
         "linkedin_session_id": None,
         "linkedin_jsessionid": None,
-        "debug": False
+        "debug": False,
+        "collect_urls_only": False,
+        "process_url": None
     }
     
     # Get Apify environment variables
@@ -192,15 +216,26 @@ def read_input_from_file() -> Dict[str, Any]:
                     if 'session_cookies' in file_data and file_data['session_cookies']:
                         print("Warning: 'session_cookies' is deprecated. Please use 'linkedin_session_id' and 'linkedin_jsessionid' instead.")
                     
+                    # Check for operation mode parameters
+                    if 'collect_urls_only' in file_data:
+                        input_data['collect_urls_only'] = file_data['collect_urls_only']
+                        if input_data['collect_urls_only']:
+                            print("Operating in URL collection mode (no job details)")
+                    
+                    if 'process_url' in file_data and file_data['process_url']:
+                        input_data['process_url'] = file_data['process_url']
+                        print(f"Processing single URL: {input_data['process_url']}")
+                    
                     # Log based on search mode
                     search_mode = input_data.get('search_mode', 'keyword_location')
-                    if search_mode == "keyword_location":
-                        print(f"Read input from {input_file}: keyword={input_data['keyword']}, location={input_data['location']}")
-                    elif search_mode == "company":
-                        print(f"Read input from {input_file}: company={input_data['company']}")
-                    elif search_mode == "specific_urls":
-                        start_urls = file_data.get('start_urls', [])
-                        print(f"Read input from {input_file}: {len(start_urls)} specific URLs")
+                    if not input_data.get('process_url'):
+                        if search_mode == "keyword_location":
+                            print(f"Read input from {input_file}: keyword={input_data['keyword']}, location={input_data['location']}")
+                        elif search_mode == "company":
+                            print(f"Read input from {input_file}: company={input_data['company']}")
+                        elif search_mode == "specific_urls":
+                            start_urls = file_data.get('start_urls', [])
+                            print(f"Read input from {input_file}: {len(start_urls)} specific URLs")
                 break
         except Exception as e:
             print(f"Error reading input file {input_file}: {e}")
@@ -270,6 +305,35 @@ async def process_apify_items():
         Actor.log.warning("No valid items were found to push to the dataset")
 
 
+async def process_job_urls():
+    """Process job URLs collected in memory and add them to the Apify request queue."""
+    if not APIFY_AVAILABLE:
+        return
+        
+    global JOB_URLS
+    
+    # Get the default request queue
+    request_queue = await Actor.open_request_queue()
+    
+    # Add each job URL to the queue
+    added_count = 0
+    for url in JOB_URLS:
+        try:
+            # Add the URL to the queue with a unique ID
+            await request_queue.add_request({
+                'url': url,
+                'uniqueKey': f"job_{url.split('/')[-1]}",  # Use job ID as unique key
+                'userData': {
+                    'type': 'job_detail'
+                }
+            })
+            added_count += 1
+        except Exception as e:
+            Actor.log.error(f"Error adding URL to queue: {e}")
+    
+    Actor.log.info(f"Added {added_count} job URLs to the request queue")
+
+
 class MemoryStoragePipeline:
     """Pipeline that stores items in memory for later processing by Apify."""
     
@@ -313,6 +377,29 @@ class MemoryStoragePipeline:
         
         return item
 
+class JobUrlStoragePipeline:
+    """Pipeline that stores job URLs in memory for later queueing by Apify."""
+    
+    def process_item(self, item, spider):
+        """Store the job URL in memory."""
+        global JOB_URLS
+        
+        try:
+            # Check if this is a job URL item
+            if 'url' in item and item['url']:
+                # Add to global URLs list
+                JOB_URLS.append(item['url'])
+                
+                # Log the count
+                if hasattr(spider, 'logger'):
+                    spider.logger.info(f"Added job URL to queue storage. Total: {len(JOB_URLS)}")
+                
+        except Exception as e:
+            if hasattr(spider, 'logger'):
+                spider.logger.error(f"Error storing job URL in memory: {e}")
+        
+        return item
+
 
 async def run_apify_actor() -> None:
     """Run the LinkedIn scraper as an Apify Actor."""
@@ -320,8 +407,9 @@ async def run_apify_actor() -> None:
         print("Error: Apify package is not available. Cannot run in Actor mode.")
         return
     
-    global SCRAPED_ITEMS
+    global SCRAPED_ITEMS, JOB_URLS
     SCRAPED_ITEMS = []  # Reset the global items list
+    JOB_URLS = []       # Reset the global URLs list
     
     # Enter the context of the Actor
     async with Actor:
@@ -330,6 +418,10 @@ async def run_apify_actor() -> None:
         
         # Extract search mode
         search_mode = actor_input.get('search_mode', 'keyword_location')
+        
+        # Extract operation mode
+        collect_urls_only = actor_input.get('collect_urls_only', False)
+        process_url = actor_input.get('process_url')
         
         # Extract parameters based on search mode
         keyword = actor_input.get('keyword')
@@ -349,27 +441,50 @@ async def run_apify_actor() -> None:
         start_urls = [url.get('url') for url in actor_input.get('start_urls', [])]
         debug = actor_input.get('debug', False)
         
-        # Validate required parameters based on search mode
-        if search_mode == "keyword_location" and (not keyword or not location):
-            Actor.log.error("For 'keyword_location' search mode, both 'keyword' and 'location' must be provided")
-            await Actor.fail("Missing required parameters")
-            return
-        elif search_mode == "company" and not company:
-            Actor.log.error("For 'company' search mode, 'company' name must be provided")
-            await Actor.fail("Missing required parameters")
-            return
-        elif search_mode == "specific_urls" and not start_urls:
-            Actor.log.error("For 'specific_urls' search mode, 'start_urls' must be provided")
-            await Actor.fail("Missing required parameters")
-            return
+        # Check if we're running in URL collection mode or job detail processing mode
+        if process_url:
+            Actor.log.info(f"Processing single job URL: {process_url}")
+        elif collect_urls_only:
+            Actor.log.info("Running in URL collection mode (collecting job URLs for queue)")
+            # Validate required parameters based on search mode
+            if search_mode == "keyword_location" and (not keyword or not location):
+                Actor.log.error("For 'keyword_location' search mode, both 'keyword' and 'location' must be provided")
+                await Actor.fail("Missing required parameters")
+                return
+            elif search_mode == "company" and not company:
+                Actor.log.error("For 'company' search mode, 'company' name must be provided")
+                await Actor.fail("Missing required parameters")
+                return
+        else:
+            # Validate required parameters based on search mode
+            if search_mode == "keyword_location" and (not keyword or not location):
+                Actor.log.error("For 'keyword_location' search mode, both 'keyword' and 'location' must be provided")
+                await Actor.fail("Missing required parameters")
+                return
+            elif search_mode == "company" and not company:
+                Actor.log.error("For 'company' search mode, 'company' name must be provided")
+                await Actor.fail("Missing required parameters")
+                return
+            elif search_mode == "specific_urls" and not start_urls:
+                Actor.log.error("For 'specific_urls' search mode, 'start_urls' must be provided")
+                await Actor.fail("Missing required parameters")
+                return
         
-        # Log startup information based on search mode
-        if search_mode == "keyword_location":
-            Actor.log.info(f"Starting LinkedIn job search for '{keyword}' in '{location}'")
-        elif search_mode == "company":
-            Actor.log.info(f"Starting LinkedIn job search for company: '{company}'")
-        elif search_mode == "specific_urls":
-            Actor.log.info(f"Starting LinkedIn job scraping for {len(start_urls)} specific URLs")
+        # Log startup information based on operation mode
+        if process_url:
+            Actor.log.info(f"Starting LinkedIn job detail processing for URL: {process_url}")
+        elif collect_urls_only:
+            if search_mode == "keyword_location":
+                Actor.log.info(f"Collecting job URLs for '{keyword}' in '{location}'")
+            elif search_mode == "company":
+                Actor.log.info(f"Collecting job URLs for company: '{company}'")
+        else:
+            if search_mode == "keyword_location":
+                Actor.log.info(f"Starting LinkedIn job search for '{keyword}' in '{location}'")
+            elif search_mode == "company":
+                Actor.log.info(f"Starting LinkedIn job search for company: '{company}'")
+            elif search_mode == "specific_urls":
+                Actor.log.info(f"Starting LinkedIn job scraping for {len(start_urls)} specific URLs")
             
         Actor.log.info(f"Debug mode: {'enabled' if debug else 'disabled'}")
         
@@ -407,21 +522,34 @@ async def run_apify_actor() -> None:
         # Add debug flag to settings
         settings.set('DEBUG_MODE', debug)
         
-        # Add our custom pipeline to collect items in memory
-        # Use a completely new pipeline configuration to avoid issues with existing pipelines
-        settings.set('ITEM_PIPELINES', {
-            'src.main.MemoryStoragePipeline': 300,
-        })
+        # Add our custom pipeline to collect items in memory based on operation mode
+        if process_url or not collect_urls_only:
+            # For job detail processing, use the regular item pipeline
+            settings.set('ITEM_PIPELINES', {
+                'src.main.MemoryStoragePipeline': 300,
+            })
+        else:
+            # For URL collection mode, use the URL storage pipeline
+            settings.set('ITEM_PIPELINES', {
+                'src.main.JobUrlStoragePipeline': 300,
+            })
         
-        # Configure spider parameters based on search mode
+        # Configure spider parameters based on operation mode
         spider_kwargs = {
             'max_pages': max_pages,
             'max_jobs': max_jobs,
             'linkedin_session_id': linkedin_session_id,
             'linkedin_jsessionid': linkedin_jsessionid,
-            'start_urls': start_urls,
-            'debug': debug
+            'debug': debug,
+            'collect_urls_only': collect_urls_only,
         }
+        
+        # If processing a single URL
+        if process_url:
+            spider_kwargs['start_urls'] = [process_url]
+            spider_kwargs['process_job_details_only'] = True
+        else:
+            spider_kwargs['start_urls'] = start_urls
         
         # Add parameters based on search mode
         if search_mode == "keyword_location":
@@ -443,8 +571,13 @@ async def run_apify_actor() -> None:
         # Log completion
         Actor.log.info("LinkedIn job scraping completed")
         
-        # Process the items collected in memory
-        await process_apify_items()
+        # Process the items collected in memory based on operation mode
+        if process_url or not collect_urls_only:
+            # Process job details
+            await process_apify_items()
+        else:
+            # Process job URLs for queueing
+            await process_job_urls()
 
 
 def main() -> None:
@@ -473,7 +606,9 @@ def main() -> None:
                 linkedin_session_id=input_data.get('linkedin_session_id'),
                 linkedin_jsessionid=input_data.get('linkedin_jsessionid'),
                 debug=bool(input_data.get('debug', False)),
-                start_urls=input_data.get('start_urls')
+                start_urls=input_data.get('start_urls'),
+                collect_urls_only=bool(input_data.get('collect_urls_only', False)),
+                process_url=input_data.get('process_url')
             )
         
         print("LinkedIn Job Scraper finished.")

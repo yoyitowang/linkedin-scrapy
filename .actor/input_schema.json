@@ -1,78 +1,108 @@
 {
-    "title": "LinkedIn Job Scraper",
+    "title": "LinkedIn Job Scraper Input",
     "type": "object",
+    "description": "This actor allows you to scrape job listings from LinkedIn based on keywords, location, or company name.",
     "schemaVersion": 1,
     "properties": {
-        "search_mode": {
-            "title": "Search Mode",
-            "type": "string",
-            "description": "Choose how to search for jobs on LinkedIn",
-            "editor": "select",
-            "enum": ["keyword_location", "company", "specific_urls"],
-            "enumTitles": ["Search by Keyword & Location", "Search by Company", "Specific Job URLs"],
-            "default": "keyword_location"
-        },
-        "keyword": {
-            "title": "Job Keyword",
-            "type": "string",
-            "description": "Job search keyword (e.g., 'python developer'). Required when Search Mode is 'Search by Keyword & Location'.",
-            "editor": "textfield"
-        },
-        "location": {
-            "title": "Job Location",
-            "type": "string",
-            "description": "Job location (e.g., 'San Francisco, CA'). Required when Search Mode is 'Search by Keyword & Location'.",
-            "editor": "textfield"
-        },
-        "company": {
-            "title": "Company Name",
-            "type": "string",
-            "description": "Search for jobs at a specific company (e.g., 'Microsoft'). Required when Search Mode is 'Search by Company'.",
-            "editor": "textfield"
-        },
-        "max_pages": {
-            "title": "Maximum Pages",
-            "type": "integer",
-            "description": "Maximum number of search result pages to scrape",
-            "default": 5,
-            "minimum": 1,
-            "maximum": 100,
-            "editor": "number"
-        },
-        "max_jobs": {
-            "title": "Maximum Jobs",
-            "type": "integer",
-            "description": "Maximum number of job listings to scrape (0 for unlimited)",
-            "default": 0,
-            "minimum": 0,
-            "maximum": 1000,
-            "editor": "number"
-        },
-        "start_urls": {
-            "title": "Start URLs",
-            "type": "array",
-            "description": "Specific LinkedIn job URLs to scrape directly. Required when Search Mode is 'Specific Job URLs'.",
-            "editor": "requestListSources"
-        },
-        "linkedin_session_id": {
-            "title": "LinkedIn Session ID (Optional)",
-            "type": "string",
-            "description": "LinkedIn 'li_at' session cookie for authenticated access (recommended)",
-            "editor": "textfield"
-        },
-        "linkedin_jsessionid": {
-            "title": "LinkedIn JSESSIONID (Optional)",
-            "type": "string",
-            "description": "LinkedIn 'JSESSIONID' cookie for authenticated access",
-            "editor": "textfield"
-        },
-        "debug": {
-            "title": "Debug Mode",
-            "type": "boolean",
-            "description": "Enable debug mode to print detailed output",
-            "default": false,
-            "editor": "checkbox"
+      "search_mode": {
+        "title": "Search Mode",
+        "type": "string",
+        "description": "Choose how you want to search for jobs.",
+        "editor": "select",
+        "enum": ["keyword_location", "company", "specific_urls"],
+        "enumTitles": ["Search by Keyword & Location", "Search by Company", "Specific Job URLs"],
+        "default": "keyword_location"
+      },
+      "keyword": {
+        "title": "Job Keyword",
+        "type": "string",
+        "description": "Job title, keyword, or company you're looking for (e.g., 'software developer', 'marketing', 'Google').",
+        "editor": "textfield",
+        "default": "software developer"
+      },
+      "location": {
+        "title": "Location",
+        "type": "string",
+        "description": "Location where you want to search for jobs (e.g., 'New York', 'United States', 'Remote').",
+        "editor": "textfield",
+        "default": "United States"
+      },
+      "company": {
+        "title": "Company Name",
+        "type": "string",
+        "description": "Name of the company whose jobs you want to scrape (e.g., 'Google', 'Microsoft', 'Amazon').",
+        "editor": "textfield"
+      },
+      "max_pages": {
+        "title": "Maximum Pages to Scrape",
+        "type": "integer",
+        "description": "Maximum number of search result pages to scrape (each page contains ~25 jobs).",
+        "editor": "number",
+        "default": 1,
+        "minimum": 1
+      },
+      "max_jobs": {
+        "title": "Maximum Jobs to Scrape",
+        "type": "integer",
+        "description": "Maximum number of jobs to scrape (0 = no limit).",
+        "editor": "number",
+        "default": 10,
+        "minimum": 0
+      },
+      "linkedin_session_id": {
+        "title": "LinkedIn Session ID (li_at cookie)",
+        "type": "string",
+        "description": "LinkedIn session cookie (li_at) for authenticated access. Required for accessing all job details.",
+        "editor": "textfield",
+        "nullable": true
+      },
+      "linkedin_jsessionid": {
+        "title": "LinkedIn JSESSIONID cookie",
+        "type": "string",
+        "description": "LinkedIn JSESSIONID cookie for authenticated access. Optional but recommended.",
+        "editor": "textfield",
+        "nullable": true
+      },
+      "start_urls": {
+        "title": "Specific Job URLs",
+        "type": "array",
+        "description": "List of specific LinkedIn job URLs to scrape.",
+        "editor": "stringList",
+        "default": [],
+        "items": {
+          "title": "URL",
+          "type": "object",
+          "properties": {
+            "url": {
+              "title": "Job URL",
+              "type": "string",
+              "description": "LinkedIn job URL (e.g., https://www.linkedin.com/jobs/view/12345)",
+              "editor": "textfield"
+            }
+          }
         }
+      },
+      "collect_urls_only": {
+        "title": "Collect URLs Only",
+        "type": "boolean",
+        "description": "If enabled, the actor will only collect job URLs and add them to the request queue without parsing job details.",
+        "editor": "checkbox",
+        "default": false
+      },
+      "process_url": {
+        "title": "Process Single Job URL",
+        "type": "string",
+        "description": "Process a single job URL (typically from the request queue).",
+        "editor": "textfield",
+        "nullable": true
+      },
+      "debug": {
+        "title": "Debug Mode",
+        "type": "boolean",
+        "description": "Enable debug mode for more detailed logging.",
+        "editor": "checkbox",
+        "default": false
+      }
     },
-    "required": ["search_mode"]
-}
+    "required": []
+  }

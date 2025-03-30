@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from urllib.parse import urlencode, urlparse, parse_qs
 from scrapy.exceptions import CloseSpider
 from scrapy.utils.log import configure_logging
-from ..items import LinkedinJobItem
+from ..items import LinkedinJobItem, LinkedinJobUrlItem
 
 class LinkedinJobsSpider(scrapy.Spider):
     name = "linkedin_jobs"
@@ -29,11 +29,13 @@ class LinkedinJobsSpider(scrapy.Spider):
         'CLOSESPIDER_TIMEOUT': 0,  # Disable timeout-based shutdown
     }
     
-    def __init__(self, keyword=None, location=None, company=None, linkedin_session_id=None, linkedin_jsessionid=None, max_pages=5, max_jobs=0, start_urls=None, debug=False, *args, **kwargs):
+    def __init__(self, keyword=None, location=None, company=None, linkedin_session_id=None, linkedin_jsessionid=None, 
+                 max_pages=5, max_jobs=0, start_urls=None, debug=False, collect_urls_only=False, 
+                 process_job_details_only=False, *args, **kwargs):
         super(LinkedinJobsSpider, self).__init__(*args, **kwargs)
         self.keyword = keyword
         self.location = location
-        self.company = company  # New parameter for company search
+        self.company = company  # Parameter for company search
         self.linkedin_session_id = linkedin_session_id
         self.linkedin_jsessionid = linkedin_jsessionid
         self.max_pages = int(max_pages) if max_pages else 5
@@ -46,6 +48,9 @@ class LinkedinJobsSpider(scrapy.Spider):
         self.reached_job_limit = False
         # Track processed job IDs to avoid duplicates
         self.processed_job_ids = set()
+        # New flags for operation mode
+        self.collect_urls_only = collect_urls_only
+        self.process_job_details_only = process_job_details_only
         
         # Initialize cookies dictionary
         self.cookies = {}
@@ -85,6 +90,12 @@ class LinkedinJobsSpider(scrapy.Spider):
             
         # Log page limit
         self.logger.info(f"Page limit set: Will scrape a maximum of {self.max_pages} pages")
+        
+        # Log operation mode
+        if self.collect_urls_only:
+            self.logger.info("Operating in URL collection mode (collecting job URLs only)")
+        elif self.process_job_details_only:
+            self.logger.info("Operating in job detail processing mode (processing single job URL)")
     
     def register_shutdown_handlers(self):
         """Register handlers for graceful shutdown on SIGTERM and SIGINT"""
@@ -152,6 +163,17 @@ class LinkedinJobsSpider(scrapy.Spider):
     
     def start_requests(self):
         """Start with either session verification or direct URLs"""
+        # If processing job details only, go directly to the job URLs
+        if self.process_job_details_only:
+            self.logger.info(f"Processing job details for {len(self.start_urls_list)} URLs")
+            for url in self.start_urls_list:
+                yield scrapy.Request(
+                    url=url, 
+                    callback=self.parse_job_details,
+                    cookies=self.cookies
+                )
+            return
+            
         # If specific job URLs are provided, scrape those first
         if self.start_urls_list:
             self.logger.info(f"Starting with {len(self.start_urls_list)} provided job URLs")
@@ -406,13 +428,18 @@ class LinkedinJobsSpider(scrapy.Spider):
             # Add to processed IDs
             self.processed_job_ids.add(job_id)
             
-            # Follow the job link
-            yield scrapy.Request(
-                url=job_link,
-                callback=self.parse_job_details,
-                cookies=self.cookies,
-                meta={"company_name": company_name, "job_id": job_id}
-            )
+            # If in URL collection mode, yield the URL as an item
+            if self.collect_urls_only:
+                self.job_count += 1
+                yield LinkedinJobUrlItem(url=job_link, id=job_id)
+            else:
+                # Follow the job link
+                yield scrapy.Request(
+                    url=job_link,
+                    callback=self.parse_job_details,
+                    cookies=self.cookies,
+                    meta={"company_name": company_name, "job_id": job_id}
+                )
         
         # Check for pagination and follow next page if available
         if not self.reached_job_limit and page < self.max_pages:
@@ -500,11 +527,34 @@ class LinkedinJobsSpider(scrapy.Spider):
                         for job_link in job_links:
                             if self.check_job_limit():
                                 return
-                            yield response.follow(
-                                job_link,
-                                callback=self.parse_job_details,
-                                cookies=self.cookies
-                            )
+                                
+                            # If in URL collection mode, yield the URL as an item
+                            if self.collect_urls_only:
+                                # Extract job ID from the URL
+                                job_id = self._extract_job_id_from_url(job_link)
+                                
+                                # Skip if we've already processed this job ID
+                                if job_id in self.processed_job_ids:
+                                    self.logger.info(f"Skipping already processed job ID: {job_id}")
+                                    continue
+                                
+                                # Add to processed IDs
+                                self.processed_job_ids.add(job_id)
+                                
+                                # Make sure URL is absolute
+                                if not job_link.startswith("http"):
+                                    job_link = f"https://www.linkedin.com{job_link}"
+                                
+                                # Yield URL as item
+                                self.job_count += 1
+                                yield LinkedinJobUrlItem(url=job_link, id=job_id)
+                            else:
+                                # Process job details
+                                yield response.follow(
+                                    job_link,
+                                    callback=self.parse_job_details,
+                                    cookies=self.cookies
+                                )
         
         self.logger.info(f"Found {len(job_cards)} job cards on page {self.page_count}")
         
@@ -559,6 +609,10 @@ class LinkedinJobsSpider(scrapy.Spider):
                 if company_link and not company_link.startswith("http"):
                     company_link = f"https://www.linkedin.com{company_link}"
                 
+                # Make sure URL is absolute
+                if not job_link.startswith("http"):
+                    job_link = f"https://www.linkedin.com{job_link}"
+                
                 # Only log detailed info in debug mode
                 if self.debug:
                     self.logger.debug(f"Found job: {job_title} at {company_name} in {location}")
@@ -569,21 +623,27 @@ class LinkedinJobsSpider(scrapy.Spider):
                 else:
                     self.logger.info(f"Found job: {job_title} at {company_name}")
                 
-                yield scrapy.Request(
-                    url=job_link,
-                    callback=self.parse_job_details,
-                    cookies=self.cookies,
-                    meta={
-                        "job_title": job_title,
-                        "company_name": company_name,
-                        "location": location,
-                        "date_posted": date_posted,
-                        "relative_time": relative_time,
-                        "company_logo": company_logo,
-                        "job_id": job_id,
-                        "company_link": company_link  # Pass the company link if found
-                    }
-                )
+                # If in URL collection mode, yield the URL as an item
+                if self.collect_urls_only:
+                    self.job_count += 1
+                    yield LinkedinJobUrlItem(url=job_link, id=job_id)
+                else:
+                    # Process job details
+                    yield scrapy.Request(
+                        url=job_link,
+                        callback=self.parse_job_details,
+                        cookies=self.cookies,
+                        meta={
+                            "job_title": job_title,
+                            "company_name": company_name,
+                            "location": location,
+                            "date_posted": date_posted,
+                            "relative_time": relative_time,
+                            "company_logo": company_logo,
+                            "job_id": job_id,
+                            "company_link": company_link  # Pass the company link if found
+                        }
+                    )
             else:
                 self.logger.warning("Found a job card but couldn't extract the job link")
         
@@ -1006,12 +1066,12 @@ class LinkedinJobsSpider(scrapy.Spider):
         for script in script_data:
             # Look for different data patterns
             patterns = [
-                r'(\{"data":\{"jobPostingInfo":.*?\})(?=;)',
-                r'(\{"data":\{"companyInfo":.*?\})(?=;)',
-                r'(\{"data":\{"jobData":.*?\})(?=;)',
-                r'(window\.INITIAL_STATE\s*=\s*\{.*?\})(?=;)',
-                r'(\{.*?"jobPostingId":.*?\})(?=;)',
-                r'(\{.*?"companyId":.*?\})(?=;)'
+                r'(\{"data":\{"jobPostingInfo":.+?\})\s*;',
+                r'(\{"jobData":.+?\})\s*;',
+                r'(\{"data":.+?\})\s*;',
+                r'window\.initialData\s*=\s*(\{.+?\})\s*;',
+                r'_initialData\s*=\s*(\{.+?\})\s*;',
+                r'(\{"companyInfo":.+?\})\s*;'
             ]
             
             for pattern in patterns:
@@ -1021,224 +1081,92 @@ class LinkedinJobsSpider(scrapy.Spider):
                         data = json.loads(matches.group(1))
                         # Merge with existing data
                         job_data.update(data)
-                        if self.debug:
-                            self.logger.debug(f"Successfully extracted JSON data using pattern: {pattern[:30]}...")
                     except json.JSONDecodeError:
                         if self.debug:
-                            self.logger.warning(f"Failed to parse JSON data from script with pattern: {pattern[:30]}...")
-        
-        # Try to find job data in code elements (LinkedIn sometimes puts JSON in code tags)
-        if not job_data:
-            code_data = response.xpath('//code[contains(text(), "jobPostingInfo") or contains(text(), "companyInfo") or contains(text(), "jobData")]/text()').getall()
-            for code in code_data:
-                try:
-                    # Try to parse as JSON directly
-                    data = json.loads(code)
-                    job_data.update(data)
-                    if self.debug:
-                        self.logger.debug("Successfully extracted JSON data from code element")
-                except json.JSONDecodeError:
-                    # If direct parsing fails, try to find JSON objects within the code
-                    for pattern in patterns:
-                        matches = re.search(pattern, code, re.DOTALL)
-                        if matches:
-                            try:
-                                data = json.loads(matches.group(1))
-                                job_data.update(data)
-                                if self.debug:
-                                    self.logger.debug(f"Successfully extracted JSON data from code using pattern: {pattern[:30]}...")
-                            except json.JSONDecodeError:
-                                pass
+                            self.logger.debug(f"Failed to parse JSON data from script")
+                    except Exception as e:
+                        if self.debug:
+                            self.logger.debug(f"Error extracting JSON data: {str(e)}")
         
         return job_data
     
     def _extract_additional_data(self, json_data):
-        """Extract additional data from JSON if available"""
+        """Extract additional job data from JSON"""
         additional_data = {}
-        if json_data:
-            try:
-                # Navigate through the JSON structure to find job data
-                job_data = None
-                
-                # Check different possible paths in the JSON structure
-                if 'data' in json_data and 'jobPostingInfo' in json_data['data']:
-                    job_data = json_data['data']['jobPostingInfo']
-                elif 'jobPostingInfo' in json_data:
-                    job_data = json_data['jobPostingInfo']
-                elif 'data' in json_data and 'jobData' in json_data['data']:
-                    job_data = json_data['data']['jobData']
-                
-                if job_data:
-                    # Extract job data fields
-                    fields_to_extract = [
-                        'isReposted', 'posterId', 'easyApply', 'isPromoted', 
-                        'jobState', 'contentSource', 'companyWebsite', 'companySlogan',
-                        'companyEmployeesCount'
-                    ]
-                    
-                    for field in fields_to_extract:
-                        if field in job_data:
-                            additional_data[field] = job_data[field]
-                    
-                    # Extract applicant insights
-                    if 'jobApplicantInsights' in job_data:
-                        additional_data['jobApplicantInsights'] = job_data['jobApplicantInsights']
-                    
-                    # Extract company data
-                    if 'company' in job_data:
-                        additional_data['company'] = job_data['company']
-                        
-                        # Extract company LinkedIn URL if available in company data
-                        if 'companyPageUrl' in job_data['company']:
-                            company_url = job_data['company']['companyPageUrl']
-                            additional_data['companyLinkedinUrl'] = self._normalize_company_url(company_url)
-                    
-                    # Extract salary data
-                    if 'salary' in job_data:
-                        additional_data['salary'] = job_data['salary']
-                    
-                    # Extract recruiter data
-                    if 'recruiter' in job_data:
-                        additional_data['recruiter'] = job_data['recruiter']
-                    
-                    # If we have a timestamp in the JSON data, use it for postedAt
-                    if 'listedAt' in job_data and not additional_data.get('postedAt'):
-                        additional_data['postedAt'] = self._format_datetime(job_data['listedAt'])
-                    
-                    # Extract skills if we don't have them yet
-                    if 'skills' in job_data and not additional_data.get('skills'):
-                        additional_data['skills'] = job_data['skills']
-                
-                # Check for company info in a separate section
-                if 'data' in json_data and 'companyInfo' in json_data['data']:
-                    company_info = json_data['data']['companyInfo']
-                    
-                    # Extract company LinkedIn URL if available
-                    if 'companyPageUrl' in company_info:
-                        company_url = company_info['companyPageUrl']
-                        additional_data['companyLinkedinUrl'] = self._normalize_company_url(company_url)
-                
-            except Exception as e:
-                if self.debug:
-                    self.logger.warning(f"Error extracting additional data from JSON: {e}")
         
+        if not json_data:
+            return additional_data
+            
+        try:
+            # Navigate through different possible JSON structures
+            job_posting_info = None
+            
+            # Try different paths to job posting info
+            if 'data' in json_data and 'jobPostingInfo' in json_data['data']:
+                job_posting_info = json_data['data']['jobPostingInfo']
+            elif 'jobPostingInfo' in json_data:
+                job_posting_info = json_data['jobPostingInfo']
+            elif 'data' in json_data and 'jobData' in json_data['data']:
+                job_posting_info = json_data['data']['jobData']
+            elif 'jobData' in json_data:
+                job_posting_info = json_data['jobData']
+                
+            if job_posting_info:
+                # Extract job details
+                if 'title' in job_posting_info:
+                    additional_data['title'] = job_posting_info['title']
+                    
+                if 'description' in job_posting_info:
+                    additional_data['descriptionText'] = job_posting_info['description']
+                    
+                if 'formattedLocation' in job_posting_info:
+                    additional_data['location'] = job_posting_info['formattedLocation']
+                    
+                # Extract employment type
+                if 'employmentType' in job_posting_info:
+                    additional_data['employment_type'] = job_posting_info['employmentType']
+                    
+                # Extract seniority level
+                if 'seniority' in job_posting_info:
+                    additional_data['seniority_level'] = job_posting_info['seniority']
+                elif 'seniorityLevel' in job_posting_info:
+                    additional_data['seniority_level'] = job_posting_info['seniorityLevel']
+                    
+                # Extract posted date
+                if 'listedAt' in job_posting_info:
+                    try:
+                        # Convert timestamp to ISO format
+                        timestamp = int(job_posting_info['listedAt']) / 1000  # Convert from milliseconds
+                        posted_date = datetime.fromtimestamp(timestamp).isoformat()
+                        additional_data['postedAt'] = posted_date
+                    except:
+                        pass
+                        
+            # Try to extract company info
+            company_info = None
+            
+            if 'data' in json_data and 'companyInfo' in json_data['data']:
+                company_info = json_data['data']['companyInfo']
+            elif 'companyInfo' in json_data:
+                company_info = json_data['companyInfo']
+                
+            if company_info:
+                # Extract company name
+                if 'name' in company_info:
+                    additional_data['companyName'] = company_info['name']
+                    
+                # Extract company URL
+                if 'companyPageUrl' in company_info:
+                    additional_data['companyLinkedinUrl'] = company_info['companyPageUrl']
+                    
+                # Extract company logo
+                if 'logo' in company_info:
+                    additional_data['companyLogo'] = company_info['logo']
+                elif 'logoUrl' in company_info:
+                    additional_data['companyLogo'] = company_info['logoUrl']
+                    
+        except Exception as e:
+            if self.debug:
+                self.logger.debug(f"Error extracting additional data: {str(e)}")
+                
         return additional_data
-    
-    def _clean_html(self, html_text):
-        """Clean HTML content and extract readable text without external dependencies"""
-        if not html_text:
-            return ""
-        
-        try:
-            # First, extract just the main content section which contains the job description
-            main_content_match = re.search(r'<div class="description__text[^>]*>(.*?)</div>\s*</section>', html_text, re.DOTALL)
-            if main_content_match:
-                html_text = main_content_match.group(1)
-            
-            # Remove all buttons and UI elements
-            html_text = re.sub(r'<button.*?</button>', '', html_text, flags=re.DOTALL)
-            html_text = re.sub(r'<icon.*?</icon>', '', html_text, flags=re.DOTALL)
-            
-            # Remove script and style elements
-            html_text = re.sub(r'<script.*?>.*?</script>', '', html_text, flags=re.DOTALL)
-            html_text = re.sub(r'<style.*?>.*?</style>', '', html_text, flags=re.DOTALL)
-            
-            # Replace common HTML elements with text formatting
-            html_text = re.sub(r'<br\s*/?>|<br\s*/?>', '\n', html_text)
-            html_text = re.sub(r'<li.*?>', '• ', html_text)
-            html_text = re.sub(r'</li>', '\n', html_text)
-            html_text = re.sub(r'</(p|div|h\d|ul|ol)>', '\n', html_text)
-            html_text = re.sub(r'<(p|div|h\d|ul|ol)[^>]*>', '', html_text)
-            
-            # Remove any remaining HTML tags
-            html_text = re.sub(r'<[^>]*>', '', html_text)
-            
-            # Handle special HTML entities
-            html_text = html_text.replace('&amp;', '&')
-            html_text = html_text.replace('&lt;', '<')
-            html_text = html_text.replace('&gt;', '>')
-            html_text = html_text.replace('&quot;', '"')
-            html_text = html_text.replace('&nbsp;', ' ')
-            
-            # Fix multiple consecutive newlines
-            html_text = re.sub(r'\n{3,}', '\n\n', html_text)
-            
-            # Fix multiple spaces
-            html_text = re.sub(r' {2,}', ' ', html_text)
-            
-            return html_text.strip()
-        except Exception:
-            # If all else fails, just return the original with tags stripped
-            return re.sub(r'<[^>]*>', '', html_text).strip()
-    
-    def _clean_text(self, text):
-        """Clean text by removing extra whitespace"""
-        if not text:
-            return ""
-        return ' '.join(text.split())
-    
-    def _parse_relative_time(self, relative_time_text):
-        """Parse relative time text (like "5 hours ago", "2 days ago") and return an estimated datetime"""
-        if not relative_time_text:
-            return None
-            
-        now = datetime.now()
-        relative_time_text = relative_time_text.lower().strip()
-        
-        # Match patterns like "5 hours ago", "2 days ago", "1 week ago", etc.
-        minutes_match = re.search(r'(\d+)\s+minute', relative_time_text)
-        hours_match = re.search(r'(\d+)\s+hour', relative_time_text)
-        days_match = re.search(r'(\d+)\s+day', relative_time_text)
-        weeks_match = re.search(r'(\d+)\s+week', relative_time_text)
-        months_match = re.search(r'(\d+)\s+month', relative_time_text)
-        
-        if minutes_match:
-            minutes = int(minutes_match.group(1))
-            return now - timedelta(minutes=minutes)
-        elif hours_match:
-            hours = int(hours_match.group(1))
-            return now - timedelta(hours=hours)
-        elif days_match:
-            days = int(days_match.group(1))
-            return now - timedelta(days=days)
-        elif weeks_match:
-            weeks = int(weeks_match.group(1))
-            return now - timedelta(weeks=weeks)
-        elif months_match:
-            months = int(months_match.group(1))
-            # Approximate a month as 30 days
-            return now - timedelta(days=30*months)
-        elif "just now" in relative_time_text or "just posted" in relative_time_text:
-            return now
-        elif "yesterday" in relative_time_text:
-            return now - timedelta(days=1)
-        
-        # If we can't parse the relative time, return None
-        return None
-    
-    def _format_datetime(self, date_value):
-        """Format date to ISO format (YYYY-MM-DDTHH:MM:SS)"""
-        if not date_value:
-            return None
-            
-        try:
-            # If it's already a datetime object
-            if isinstance(date_value, datetime):
-                return date_value.strftime('%Y-%m-%dT%H:%M:%S')
-                
-            # If it's already in ISO format
-            if isinstance(date_value, str) and 'T' in date_value:
-                # Ensure it's properly formatted
-                dt = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
-                return dt.strftime('%Y-%m-%dT%H:%M:%S')
-            
-            # If it's a timestamp (integer)
-            if isinstance(date_value, (int, float)):
-                dt = datetime.fromtimestamp(date_value / 1000)  # Convert milliseconds to seconds
-                return dt.strftime('%Y-%m-%dT%H:%M:%S')
-                
-            # If it's a relative date string, use current date
-            return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-        except Exception:
-            return None
-                        
