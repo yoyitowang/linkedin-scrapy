@@ -416,6 +416,14 @@ async def run_apify_actor() -> None:
         # Retrieve the Actor input
         actor_input = await Actor.get_input() or {}
         
+        # Check if we're running in queue processing mode
+        queue_operation = actor_input.get('queue_operation', 'run')
+        
+        if queue_operation == 'process_queue':
+            # Process URLs from the request queue
+            await process_queue_urls()
+            return
+        
         # Extract search mode
         search_mode = actor_input.get('search_mode', 'keyword_location')
         
@@ -438,7 +446,7 @@ async def run_apify_actor() -> None:
         
         max_pages = actor_input.get('max_pages', 5)
         max_jobs = actor_input.get('max_jobs', 0)
-        start_urls = [url.get('url') for url in actor_input.get('start_urls', [])]
+        start_urls = actor_input.get('start_urls', [])
         debug = actor_input.get('debug', False)
         
         # Check if we're running in URL collection mode or job detail processing mode
@@ -579,7 +587,109 @@ async def run_apify_actor() -> None:
             # Process job URLs for queueing
             await process_job_urls()
 
-
+async def process_queue_urls():
+    """Process URLs from the Apify request queue."""
+    Actor.log.info("Starting to process URLs from the request queue")
+    
+    # Get the default request queue
+    request_queue = await Actor.open_request_queue()
+    
+    # Retrieve the Actor input
+    actor_input = await Actor.get_input() or {}
+    
+    # Extract parameters
+    max_jobs = actor_input.get('max_jobs', 0)
+    linkedin_session_id = actor_input.get('linkedin_session_id')
+    linkedin_jsessionid = actor_input.get('linkedin_jsessionid')
+    debug = actor_input.get('debug', False)
+    
+    # Keep track of processed jobs
+    processed_count = 0
+    
+    # Process queue items in batches
+    while True:
+        # Check if we've reached the job limit
+        if max_jobs > 0 and processed_count >= max_jobs:
+            Actor.log.info(f"Reached the maximum job count limit ({max_jobs}). Stopping queue processing.")
+            break
+            
+        # Get the next request from the queue
+        request_info = await request_queue.fetch_next_request()
+        
+        # If there are no more requests, we're done
+        if not request_info:
+            Actor.log.info("No more requests in the queue. Queue processing complete.")
+            break
+            
+        try:
+            # Get the URL from the request
+            url = request_info.get('url')
+            
+            if not url:
+                Actor.log.warning("Request from queue has no URL. Marking as handled and skipping.")
+                await request_queue.mark_request_as_handled(request_info)
+                continue
+                
+            Actor.log.info(f"Processing job URL from queue: {url}")
+            
+            # Get Scrapy project settings
+            settings = get_project_settings()
+            
+            # Configure logging based on debug flag
+            if not debug:
+                settings.set('LOG_LEVEL', 'INFO')
+                settings.set('LOG_ENABLED', True)
+                settings.set('LOG_FORMATTER', 'src.linkedin_scraper.formatters.LinkedInLogFormatter')
+                settings.set('LOG_STDOUT', False)
+            else:
+                settings.set('LOG_LEVEL', 'DEBUG')
+                settings.set('LOG_ENABLED', True)
+            
+            # Add our custom pipeline to collect items in memory
+            settings.set('ITEM_PIPELINES', {
+                'src.main.MemoryStoragePipeline': 300,
+            })
+            
+            # Configure spider parameters for processing a single URL
+            spider_kwargs = {
+                'max_jobs': 1,  # Process only this one job
+                'linkedin_session_id': linkedin_session_id,
+                'linkedin_jsessionid': linkedin_jsessionid,
+                'debug': debug,
+                'start_urls': [url],
+                'process_job_details_only': True
+            }
+            
+            # Reset the global items list for this job
+            global SCRAPED_ITEMS
+            SCRAPED_ITEMS = []
+            
+            # Create and run the crawler process
+            process = CrawlerProcess(settings)
+            process.crawl(LinkedinJobsSpider, **spider_kwargs)
+            
+            # Run the crawler for this URL
+            process.start()
+            
+            # Process the items collected in memory
+            await process_apify_items()
+            
+            # Increment the processed count
+            processed_count += 1
+            
+            # Mark the request as handled
+            await request_queue.mark_request_as_handled(request_info)
+            
+            Actor.log.info(f"Successfully processed job {processed_count} from queue")
+            
+        except Exception as e:
+            Actor.log.error(f"Error processing request from queue: {e}")
+            
+            # Mark the request as failed
+            await request_queue.reclaim_request(request_info)
+            
+            # Log the error but continue processing
+            Actor.log.error(f"Request marked as failed and returned to queue: {url}")
 def main() -> None:
     """Main entry point for the LinkedIn Job Scraper."""
     print("LinkedIn Job Scraper starting...")
